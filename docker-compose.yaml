@@ -1,45 +1,41 @@
 version: "3.9"
 
 services:
-  docvision:
+  docvision-api:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: docvision-ocr
+    container_name: docvision-api
     restart: unless-stopped
 
     ports:
-      - "8501:8501"
+      - "8000:8000"
 
-    # ─── Mount your document folders as read-only ───
     volumes:
+      # Document folders (read-only)
       - /home/priyanshu/Desktop/Mistral3OCR/Data/Invoice:/data/Invoice:ro
       - /home/priyanshu/Desktop/Mistral3OCR/Data/Contract:/data/Contract:ro
       - /home/priyanshu/Desktop/Mistral3OCR/Data/Crac:/data/Crac:ro
-      # Persist logs on the host
-      - ./logs:/app/logs
-      # Persist SQLite DB (results + batch state survive restarts)
+      # Persistent storage
       - ./data:/app/data
-      # Persist generated Word documents
+      - ./logs:/app/logs
       - ./docx_outputs:/app/data/docx_outputs
 
     environment:
-      # ─── Points to Ollama running on the HOST machine ───
-      # host.docker.internal works on Docker Desktop (macOS/Windows)
-      # On Linux, use the extra_hosts mapping below instead
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - OLLAMA_MODEL=mistral-small3.1:24b-2503-fp16
-
-      # Pre-configured folder paths (inside container)
+      - OLLAMA_TIMEOUT=300
       - INVOICE_DIR=/data/Invoice
       - CONTRACT_DIR=/data/Contract
       - CRAC_DIR=/data/Crac
+      - DB_PATH=/app/data/docvision.db
+      - DOCX_OUTPUT_DIR=/app/data/docx_outputs
+      - LOG_DIR=/app/logs
+      - CORS_ORIGINS=*
 
-    # ─── Linux: map host.docker.internal to the host's gateway IP ───
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
-    # Allow generous memory for large PDF processing
     deploy:
       resources:
         limits:
