@@ -10,9 +10,9 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-from utils.ollama_client import OllamaOCRClient
-from utils.pdf_handler import pdf_to_images
-from utils.logger import setup_logger
+from app.utils.ollama_client import OllamaOCRClient
+from app.utils.pdf_handler import pdf_to_images
+from app.utils.logger import setup_logger
 
 logger = setup_logger("docvision.extractor")
 

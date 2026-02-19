@@ -10,8 +10,8 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-from utils.text_cleaner import clean_ocr_text, extract_sections, structured_data_to_sections
-from utils.logger import setup_logger
+from app.utils.text_cleaner import clean_ocr_text, extract_sections, structured_data_to_sections
+from app.utils.logger import setup_logger
 
 logger = setup_logger("docvision.docx_gen")
 

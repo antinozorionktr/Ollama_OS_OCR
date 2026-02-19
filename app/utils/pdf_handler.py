@@ -7,7 +7,7 @@ Uses pdf2image (poppler) as primary, PyMuPDF as fallback.
 import os
 import tempfile
 from pathlib import Path
-from utils.logger import setup_logger
+from app.utils.logger import setup_logger
 
 logger = setup_logger("docvision.pdf")
 
