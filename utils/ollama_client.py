@@ -12,7 +12,7 @@ import requests
 from pathlib import Path
 from typing import Optional
 
-from utils.logger import setup_logger
+from app.utils.logger import setup_logger
 
 logger = setup_logger("docvision.ollama")
 
