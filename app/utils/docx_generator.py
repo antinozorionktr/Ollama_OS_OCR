@@ -15,8 +15,11 @@ from app.utils.logger import setup_logger
 
 logger = setup_logger("docvision.docx_gen")
 
+from app.core.config import get_settings
+
+settings = get_settings()
 GENERATOR_JS = os.path.join(os.path.dirname(__file__), "generate_docx.js")
-DOCX_OUTPUT_DIR = os.environ.get("DOCX_OUTPUT_DIR", "/app/data/docx_outputs")
+DOCX_OUTPUT_DIR = settings.docx_output_dir
 
 
 def generate_docx_for_result(result: dict) -> Optional[str]:

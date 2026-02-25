@@ -41,3 +41,4 @@ logs/
 
 # Other
 *.json
+node_modules

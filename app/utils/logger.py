@@ -62,7 +62,8 @@ class BufferHandler(logging.Handler):
 
 def setup_logger(
     name: str = "docvision",
-    log_dir: str = "/app/logs",
+    # log_dir: str = "/app/logs",
+    log_dir: Optional[str] = None,
     level: int = logging.DEBUG,
 ) -> logging.Logger:
     """
@@ -89,15 +90,16 @@ def setup_logger(
     logger.addHandler(console)
 
     # ── JSON file handler ──
-    os.makedirs(log_dir, exist_ok=True)
-    today = datetime.now().strftime("%Y-%m-%d")
-    file_handler = logging.FileHandler(
-        os.path.join(log_dir, f"docvision_{today}.log"),
-        encoding="utf-8",
-    )
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(JsonFormatter())
-    logger.addHandler(file_handler)
+    if log_dir:
+        os.makedirs(log_dir, exist_ok=True)
+        today = datetime.now().strftime("%Y-%m-%d")
+        file_handler = logging.FileHandler(
+            os.path.join(log_dir, f"docvision_{today}.log"),
+            encoding="utf-8",
+        )
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(JsonFormatter())
+        logger.addHandler(file_handler)
 
     # ── In-memory buffer handler ──
     buf_handler = BufferHandler()

@@ -12,7 +12,10 @@ from datetime import datetime
 from typing import Optional
 from contextlib import contextmanager
 
-DB_PATH = os.environ.get("DOCVISION_DB_PATH", "/app/data/docvision.db")
+from app.core.config import get_settings
+
+settings = get_settings()
+DB_PATH = settings.db_path
 
 
 class PersistentStore:
@@ -136,6 +139,15 @@ class PersistentStore:
                 cur.execute("SELECT * FROM results ORDER BY id DESC")
             rows = cur.fetchall()
         return [self._row_to_result(r) for r in rows]
+
+    def get_result(self, result_id: int) -> Optional[dict]:
+        """Get a single result by ID."""
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM results WHERE id = ?", (result_id,))
+            row = cur.fetchone()
+        if not row:
+            return None
+        return self._row_to_result(row)
 
     def get_results_count(self) -> dict:
         """Get count of results grouped by doc_type."""

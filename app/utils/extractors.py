@@ -135,10 +135,18 @@ class StructuredExtractor:
                     for key, value in structured.items():
                         if key.startswith("_"):
                             continue
-                        if key not in all_structured:
+                        
+                        # Merge strategy: prefer non-null/non-empty values
+                        is_current_empty = all_structured.get(key) in (None, "", "null", [])
+                        is_new_valid = value not in (None, "", "null", [])
+
+                        if key not in all_structured or (is_current_empty and is_new_valid):
                             all_structured[key] = value
                         elif isinstance(value, list) and isinstance(all_structured[key], list):
-                            all_structured[key].extend(value)
+                            # Append unique items for lists
+                            for item in value:
+                                if item not in all_structured[key]:
+                                    all_structured[key].append(item)
 
                     logger.info(
                         f"Structured data extracted: page {page_num} | {struct_dur}s | {len(structured)} fields",

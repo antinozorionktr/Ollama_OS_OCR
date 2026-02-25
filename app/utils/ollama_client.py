@@ -23,7 +23,8 @@ class OllamaOCRClient:
     def __init__(
         self,
         base_url: str = "http://localhost:11434",
-        model: str = "mistral-small3.1:24b-2503-fp16",
+        # model: str = "mistral-small3.1:24b-2503-fp16",
+        model: str = "ministral-3:14b",
         timeout: int = 300,
     ):
         self.base_url = base_url.rstrip("/")

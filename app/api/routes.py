@@ -11,6 +11,7 @@ from typing import Optional
 
 from fastapi import APIRouter, UploadFile, File, Query, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import get_settings
 from app.api.schemas import (
@@ -156,25 +157,25 @@ async def get_results(
 async def get_result(result_id: int):
     """Get a single OCR result by ID."""
     store = get_store()
-    all_results = store.get_all_results()
-    for r in all_results:
-        if r["id"] == result_id:
-            clean = clean_ocr_text(r.get("raw_text", "")) if r.get("raw_text") else None
-            return OCRResultResponse(
-                id=r["id"],
-                file_name=r.get("file_name", ""),
-                file_path=r.get("file_path", ""),
-                doc_type=r.get("doc_type", ""),
-                raw_text=r.get("raw_text"),
-                clean_text=clean,
-                structured_data=r.get("structured_data", {}),
-                page_count=r.get("page_count", 0),
-                processing_time_seconds=r.get("processing_time_seconds"),
-                error=r.get("error"),
-                processed_at=r.get("processed_at", ""),
-                batch_id=r.get("batch_id"),
-            )
-    raise HTTPException(status_code=404, detail="Result not found")
+    result = store.get_result(result_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Result not found")
+
+    clean = clean_ocr_text(result.get("raw_text", "")) if result.get("raw_text") else None
+    return OCRResultResponse(
+        id=result["id"],
+        file_name=result.get("file_name", ""),
+        file_path=result.get("file_path", ""),
+        doc_type=result.get("doc_type", ""),
+        raw_text=result.get("raw_text"),
+        clean_text=clean,
+        structured_data=result.get("structured_data", {}),
+        page_count=result.get("page_count", 0),
+        processing_time_seconds=result.get("processing_time_seconds"),
+        error=result.get("error"),
+        processed_at=result.get("processed_at", ""),
+        batch_id=result.get("batch_id"),
+    )
 
 
 @router.delete("/results", response_model=DeleteResponse, tags=["Results"])
@@ -208,15 +209,31 @@ async def process_uploaded_file(
     """Upload and process a single document file."""
     settings = get_settings()
 
+    # Determine permanent storage directory
     ext = Path(file.filename or "file.pdf").suffix.lower()
     if ext not in SUPPORTED_EXTENSIONS:
         raise HTTPException(400, f"Unsupported file type: {ext}. Supported: {SUPPORTED_EXTENSIONS}")
 
-    # Save to temp
-    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+    doc_dir_map = {
+        DocType.invoice: settings.invoice_dir,
+        DocType.contract: settings.contract_dir,
+        DocType.crac: settings.crac_dir,
+    }
+    target_dir = doc_dir_map.get(doc_type, settings.invoice_dir)
+    os.makedirs(target_dir, exist_ok=True)
+
+    # Save to permanent storage
+    file_path = os.path.join(target_dir, file.filename or "uploaded_file.pdf")
+    # Avoid overwriting
+    if os.path.exists(file_path):
+        base, extension = os.path.splitext(file_path)
+        file_path = f"{base}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{extension}"
+    
+    file_path = os.path.abspath(file_path)
+
+    with open(file_path, "wb") as buffer:
         content = await file.read()
-        tmp.write(content)
-        tmp_path = tmp.name
+        buffer.write(content)
 
     try:
         client = OllamaOCRClient(
@@ -227,13 +244,13 @@ async def process_uploaded_file(
         extractor = StructuredExtractor(client)
 
         result = extractor.process_document(
-            file_path=tmp_path,
+            file_path=file_path,
             doc_type=doc_type.value,
             extract_raw=extract_raw,
             extract_structured=extract_structured,
         )
         result["file_name"] = file.filename
-        result["file_path"] = "uploaded"
+        result["file_path"] = file_path
         result["doc_type"] = doc_type.value
         result["processed_at"] = datetime.now().isoformat()
 
@@ -250,8 +267,6 @@ async def process_uploaded_file(
     except Exception as e:
         logger.error(f"Upload processing error: {e}")
         raise HTTPException(500, f"Processing failed: {str(e)}")
-    finally:
-        os.unlink(tmp_path)
 
 
 @router.post("/process/path", response_model=ProcessResponse, tags=["Processing"])
@@ -400,12 +415,7 @@ async def get_batch_status(batch_id: str, include_queue: bool = Query(False)):
 async def generate_docx(result_id: int):
     """Generate a Word document for a specific result."""
     store = get_store()
-    all_results = store.get_all_results()
-    result = None
-    for r in all_results:
-        if r["id"] == result_id:
-            result = r
-            break
+    result = store.get_result(result_id)
     if not result:
         raise HTTPException(404, "Result not found")
     if result.get("error"):
@@ -427,12 +437,7 @@ async def generate_docx(result_id: int):
 async def download_docx(result_id: int):
     """Download the generated Word document."""
     store = get_store()
-    all_results = store.get_all_results()
-    result = None
-    for r in all_results:
-        if r["id"] == result_id:
-            result = r
-            break
+    result = store.get_result(result_id)
     if not result:
         raise HTTPException(404, "Result not found")
 
@@ -462,6 +467,32 @@ async def generate_bulk_docx(doc_type: Optional[str] = Query(None)):
             else:
                 failed += 1
     return {"generated": success, "failed": failed, "total": len(all_results)}
+
+
+@router.get("/results/{result_id}/preview", tags=["Documents"])
+async def get_document_preview(result_id: int):
+    """Stream the original document for preview."""
+    store = get_store()
+    result = store.get_result(result_id)
+    if not result:
+        raise HTTPException(404, "Result not found")
+
+    file_path = result.get("file_path")
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(404, "Original document file not found")
+
+    # Determine media type based on extension
+    ext = Path(file_path).suffix.lower()
+    media_map = {
+        ".pdf": "application/pdf",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }
+    media_type = media_map.get(ext, "application/octet-stream")
+
+    return FileResponse(file_path, media_type=media_type)
 
 
 # ═══════════════════════════════════════════════
