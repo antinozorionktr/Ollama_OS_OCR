@@ -47,6 +47,10 @@ export const ocrService = {
 
     getDownloadUrl: (resultId) => {
         return `${API_BASE_URL}/results/${resultId}/docx/download`;
+    },
+
+    deleteResult: async (resultId) => {
+        return api.delete(`results/${resultId}`);
     }
 };
 

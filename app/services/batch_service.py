@@ -52,7 +52,7 @@ def unregister_ws(ws):
         _ws_connections.discard(ws)
 
 
-def _broadcast_sync(message: dict):
+def broadcast_sync(message: dict):
     """Broadcast a message to all connected WebSocket clients (from sync thread)."""
     with _ws_lock:
         dead = set()
@@ -225,7 +225,7 @@ def _run_batch_thread(
         if loop:
             asyncio.run_coroutine_threadsafe(broadcast_async_from_loop(msg, loop), loop)
         else:
-            _broadcast_sync(msg)
+            broadcast_sync(msg)
 
         try:
             result = extractor.process_document(
@@ -287,7 +287,7 @@ def _run_batch_thread(
     if loop:
         asyncio.run_coroutine_threadsafe(broadcast_async_from_loop(done_msg, loop), loop)
     else:
-        _broadcast_sync(done_msg)
+        broadcast_sync(done_msg)
 
     logger.info(f"Batch {batch_id} complete: {batch_info['completed']} done, {batch_info['failed']} errors")
     _running_batches.pop(batch_id, None)

@@ -13,7 +13,8 @@ import {
   Cpu,
   Eye,
   X,
-  Download
+  Download,
+  Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ocrService, createWebSocket } from './services/api';
@@ -23,6 +24,7 @@ const App = () => {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadMessage, setUploadMessage] = useState('');
   const [results, setResults] = useState([]);
   const [ocrLogs, setOcrLogs] = useState([]);
   const [stats, setStats] = useState({ total_files: 0, invoice: 0, contract: 0, crac: 0, processed_count: {} });
@@ -37,6 +39,11 @@ const App = () => {
     const ws = createWebSocket((log) => {
       if (log.type === 'batch_update') {
         const msg = `[${new Date().toLocaleTimeString()}] PROCESS: ${log.current_file || 'Processing...'} (${log.progress_pct}%)`;
+        setOcrLogs(prev => [msg, ...prev].slice(0, 50));
+      } else if (log.type === 'upload_progress') {
+        setUploadProgress(log.progress_pct);
+        setUploadMessage(log.message);
+        const msg = `[${new Date().toLocaleTimeString()}] UPLOAD: ${log.message} (${log.progress_pct}%)`;
         setOcrLogs(prev => [msg, ...prev].slice(0, 50));
       } else if (log.type === 'connected') {
         setOcrLogs(prev => [`[${new Date().toLocaleTimeString()}] SYSTEM: Neural Connection Established`, ...prev]);
@@ -69,16 +76,13 @@ const App = () => {
     if (!file) return;
 
     setIsUploading(true);
-    setUploadProgress(10);
-
-    const progressInterval = setInterval(() => {
-      setUploadProgress(prev => (prev < 90 ? prev + 5 : prev));
-    }, 200);
+    setUploadProgress(5);
+    setUploadMessage('Initializing Neural Engine...');
 
     try {
       const resp = await ocrService.uploadFile(file, selectedDocType);
       setUploadProgress(100);
-      clearInterval(progressInterval);
+      setUploadMessage('Neural Ingestion Successful');
 
       const logMsg = `[${new Date().toLocaleTimeString()}] SUCCESS: ${file.name} processed in ${resp.data.processing_time_seconds}s`;
       setOcrLogs(prev => [logMsg, ...prev]);
@@ -86,14 +90,30 @@ const App = () => {
       setTimeout(() => {
         setIsUploading(false);
         setUploadProgress(0);
+        setUploadMessage('');
         setActiveTab('results');
         fetchResults();
         fetchStats();
       }, 1000);
     } catch (err) {
-      clearInterval(progressInterval);
       setIsUploading(false);
+      setUploadMessage('');
       alert(`Processing failed: ${err.response?.data?.detail || err.message}`);
+    }
+  };
+
+  const handleDelete = async (resultId) => {
+    if (!window.confirm("Are you sure you want to permanently delete this neural record from the vault?")) return;
+
+    try {
+      await ocrService.deleteResult(resultId);
+      fetchResults();
+      fetchStats();
+      const logMsg = `[${new Date().toLocaleTimeString()}] DELETE: Record ${resultId} purged from vault`;
+      setOcrLogs(prev => [logMsg, ...prev]);
+    } catch (err) {
+      console.error("Failed to delete result:", err);
+      alert(`Deletion failed: ${err.response?.data?.detail || err.message}`);
     }
   };
 
@@ -263,7 +283,7 @@ const App = () => {
                         <span className="text-[10px] uppercase tracking-widest text-gray-500">Processing</span>
                       </div>
                     </div>
-                    <div className="text-india-navy font-semibold animate-pulse">ANALYZING DOCUMENT NEURAL PATHWAYS...</div>
+                    <div className="text-india-navy font-semibold animate-pulse uppercase text-sm tracking-widest">{uploadMessage || "ANALYZING DOCUMENT NEURAL PATHWAYS..."}</div>
                   </div>
                 ) : (
                   <>
@@ -342,6 +362,7 @@ const App = () => {
                           date={new Date(res.processed_at).toLocaleString()}
                           confidence={(res.structured_data?.confidence * 100 || 95).toFixed(1) + '%'}
                           onView={() => setSelectedResult(res)}
+                          onDelete={() => handleDelete(res.id)}
                         />
                       ))
                     ) : (
@@ -451,7 +472,9 @@ const FilterTab = ({ active, onClick, label }) => (
 const PreviewModal = ({ result, onClose }) => {
   const [modalTab, setModalTab] = useState('structured');
   const previewUrl = ocrService.getPreviewUrl(result.id);
-  const isDocx = result.file_name.toLowerCase().endsWith('.docx');
+  const fileNameLower = result.file_name.toLowerCase();
+  const isDocx = fileNameLower.endsWith('.docx');
+  const isImage = /\.(jpe?g|png|webp|bmp|tiff?)$/.test(fileNameLower);
 
   return (
     <motion.div
@@ -511,6 +534,14 @@ const PreviewModal = ({ result, onClose }) => {
                     <p className="text-sm text-gray-500">Document previews are optimized for PDF and Images.<br />Please download to view the full content.</p>
                   </div>
                 </div>
+              ) : isImage ? (
+                <div className="h-full flex items-center justify-center p-2 bg-gray-100/50 rounded-2xl overflow-hidden">
+                  <img
+                    src={previewUrl}
+                    alt="Document Preview"
+                    className="max-w-full max-h-full object-contain rounded-xl shadow-xl border-4 border-white bg-white transition-transform hover:scale-[1.02]"
+                  />
+                </div>
               ) : (
                 <iframe
                   src={previewUrl}
@@ -563,7 +594,7 @@ const PreviewModal = ({ result, onClose }) => {
   );
 };
 
-const ResultRow = ({ name, type, date, confidence, onView }) => (
+const ResultRow = ({ name, type, date, confidence, onView, onDelete }) => (
   <tr className="hover:bg-gray-50 transition-colors group">
     <td className="px-6 py-4 flex items-center space-x-3">
       <div className="w-8 h-8 bg-gray-100 rounded flex items-center justify-center">
@@ -591,12 +622,22 @@ const ResultRow = ({ name, type, date, confidence, onView }) => (
       </div>
     </td>
     <td className="px-6 py-4 text-right">
-      <button
-        onClick={onView}
-        className="p-2 hover:bg-india-navy hover:text-white rounded-lg transition-all text-india-navy opacity-0 group-hover:opacity-100 shadow-sm"
-      >
-        <Eye size={18} />
-      </button>
+      <div className="flex items-center justify-end gap-2">
+        <button
+          onClick={onView}
+          className="p-2 hover:bg-india-navy hover:text-white rounded-lg transition-all text-india-navy opacity-0 group-hover:opacity-100 shadow-sm border border-india-navy/20"
+          title="Neural Preview"
+        >
+          <Eye size={18} />
+        </button>
+        <button
+          onClick={onDelete}
+          className="p-2 hover:bg-red-500 hover:text-white rounded-lg transition-all text-red-500 opacity-0 group-hover:opacity-100 shadow-sm border border-red-500/20"
+          title="Purge Record"
+        >
+          <Trash2 size={18} />
+        </button>
+      </div>
     </td>
   </tr>
 );

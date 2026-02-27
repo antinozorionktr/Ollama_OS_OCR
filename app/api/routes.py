@@ -28,7 +28,7 @@ from app.utils.text_cleaner import clean_ocr_text
 from app.utils.docx_generator import generate_docx_for_result
 from app.utils.logger import setup_logger, get_log_buffer, clear_log_buffer
 from app.services.batch_service import (
-    start_batch, resume_batch, list_files, SUPPORTED_EXTENSIONS,
+    start_batch, resume_batch, list_files, SUPPORTED_EXTENSIONS, broadcast_sync,
 )
 
 logger = setup_logger("docvision.api")
@@ -188,11 +188,28 @@ async def delete_all_results():
 
 @router.delete("/results/{result_id}", response_model=DeleteResponse, tags=["Results"])
 async def delete_result(result_id: int):
-    """Delete a single result by ID."""
+    """Delete a single result by ID and its associated file."""
     store = get_store()
+    result = store.get_result(result_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Result not found")
+
+    # Delete physical file if it exists
+    file_path = result.get("file_path")
+    if file_path and os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+            logger.info(f"Deleted file: {file_path}")
+        except Exception as e:
+            logger.error(f"Failed to delete file {file_path}: {e}")
+
+    # Delete from DB
     with store._cursor() as cur:
         cur.execute("DELETE FROM results WHERE id = ?", (result_id,))
-    return DeleteResponse(deleted=True, message=f"Result {result_id} deleted")
+        # Also clean up from batch_queue if referenced
+        cur.execute("UPDATE batch_queue SET result_id = NULL WHERE result_id = ?", (result_id,))
+
+    return DeleteResponse(deleted=True, message=f"Result {result_id} and its file purged")
 
 
 # ═══════════════════════════════════════════════
@@ -243,11 +260,20 @@ async def process_uploaded_file(
         )
         extractor = StructuredExtractor(client)
 
-        result = extractor.process_document(
+        def progress_callback(data):
+            broadcast_sync({
+                "type": "upload_progress",
+                "file_name": file.filename,
+                **data
+            })
+
+        result = await run_in_threadpool(
+            extractor.process_document,
             file_path=file_path,
             doc_type=doc_type.value,
             extract_raw=extract_raw,
             extract_structured=extract_structured,
+            on_progress=progress_callback
         )
         result["file_name"] = file.filename
         result["file_path"] = file_path

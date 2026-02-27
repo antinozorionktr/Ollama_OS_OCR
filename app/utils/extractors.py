@@ -34,6 +34,7 @@ class StructuredExtractor:
         doc_type: str = "invoice",
         extract_raw: bool = True,
         extract_structured: bool = True,
+        on_progress: Optional[callable] = None,
     ) -> dict:
         """
         Process a single document (PDF or image).
@@ -62,6 +63,9 @@ class StructuredExtractor:
             "pages": [],
         }
 
+        if on_progress:
+            on_progress({"step": "start", "progress_pct": 5, "message": "Neural engines initialized..."})
+
         # ─── Convert to image(s) ───
         if file_ext == ".pdf":
             logger.debug(f"Converting PDF to images: {file_name}", extra={"step": "pdf_convert"})
@@ -79,6 +83,8 @@ class StructuredExtractor:
                     "step": "pdf_convert",
                 },
             )
+            if on_progress:
+                on_progress({"step": "pdf_converted", "progress_pct": 15, "message": f"Document segmented into {len(image_paths)} segments"})
         elif file_ext in SUPPORTED_IMAGE_EXTENSIONS:
             image_paths = [file_path]
             result["page_count"] = 1
@@ -104,6 +110,10 @@ class StructuredExtractor:
                         "step": "page_process",
                     },
                 )
+                
+                if on_progress:
+                    base_progress = 15 + (page_idx * (80 // len(image_paths)))
+                    on_progress({"step": "page_start", "progress_pct": base_progress, "message": f"Analyzing segment {page_num}/{len(image_paths)}..."})
 
                 # Raw text extraction
                 if extract_raw:
@@ -123,6 +133,9 @@ class StructuredExtractor:
                             "status": "done",
                         },
                     )
+                    if on_progress:
+                        progress = 15 + (page_idx * (80 // len(image_paths))) + (40 // len(image_paths))
+                        on_progress({"step": "raw_done", "progress_pct": progress, "message": f"Text decoded for segment {page_num}"})
 
                 # Structured data extraction
                 if extract_structured:
@@ -158,6 +171,9 @@ class StructuredExtractor:
                             "status": "done",
                         },
                     )
+                    if on_progress:
+                        progress = 15 + ((page_idx + 1) * (80 // len(image_paths)))
+                        on_progress({"step": "struct_done", "progress_pct": progress, "message": f"Intelligence mapped for segment {page_num}"})
 
                 result["pages"].append(page_result)
 
@@ -186,5 +202,8 @@ class StructuredExtractor:
                 "status": "done",
             },
         )
+        
+        if on_progress:
+            on_progress({"step": "complete", "progress_pct": 100, "message": "Neural ingestion successful"})
 
         return result
