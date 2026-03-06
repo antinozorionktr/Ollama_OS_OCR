@@ -27,10 +27,8 @@ const App = () => {
   const [uploadMessage, setUploadMessage] = useState('');
   const [results, setResults] = useState([]);
   const [ocrLogs, setOcrLogs] = useState([]);
-  const [stats, setStats] = useState({ total_files: 0, invoice: 0, contract: 0, crac: 0, processed_count: {} });
-  const [filterType, setFilterType] = useState(null);
+  const [stats, setStats] = useState({ total_files: 0, document: 0, processed_count: {} });
   const [selectedResult, setSelectedResult] = useState(null);
-  const [selectedDocType, setSelectedDocType] = useState('invoice');
 
   useEffect(() => {
     fetchStats();
@@ -51,7 +49,7 @@ const App = () => {
     });
 
     return () => ws.close();
-  }, [filterType]);
+  }, []);
 
   const fetchStats = async () => {
     try {
@@ -64,7 +62,7 @@ const App = () => {
 
   const fetchResults = async () => {
     try {
-      const resp = await ocrService.getResults(filterType);
+      const resp = await ocrService.getResults();
       setResults(resp.data.results);
     } catch (err) {
       console.error("Failed to fetch results:", err);
@@ -80,7 +78,7 @@ const App = () => {
     setUploadMessage('Initializing Neural Engine...');
 
     try {
-      const resp = await ocrService.uploadFile(file, selectedDocType);
+      const resp = await ocrService.uploadFile(file, 'document');
       setUploadProgress(100);
       setUploadMessage('Neural Ingestion Successful');
 
@@ -217,11 +215,9 @@ const App = () => {
               </div>
 
               {/* Stats Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <StatCard label="Total Files" value={stats.total_files} icon={<FileText className="text-india-saffron" />} trend="Across all vaults" />
-                <StatCard label="Invoices" value={stats.invoice} icon={<FileText className="text-india-navy" />} trend="Financial" />
-                <StatCard label="Contracts" value={stats.contract} icon={<Shield className="text-india-green" />} trend="Legal" />
-                <StatCard label="CRACs" value={stats.crac} icon={<Zap className="text-orange-500" />} trend="Logistics" />
+                <StatCard label="Processed Records" value={stats.document} icon={<CheckCircle className="text-india-green" />} trend="Neural Extractions" />
               </div>
 
               {/* Action Cards */}
@@ -233,7 +229,7 @@ const App = () => {
                       <Upload className="text-india-saffron w-8 h-8" />
                     </div>
                     <h3 className="text-2xl font-bold text-india-navy">Neural Ingestion</h3>
-                    <p className="text-gray-500 mt-2 mb-6">Begin the extraction process by uploading Invoices, Contracts, or CRAC documents.</p>
+                    <p className="text-gray-500 mt-2 mb-6">Begin the extraction process by uploading any document for deep neural analysis.</p>
                     <button className="btn-primary flex items-center gap-2">
                       Start Mission <ArrowRight size={18} />
                     </button>
@@ -267,7 +263,7 @@ const App = () => {
             >
               <div className="text-center mb-8">
                 <h2 className="text-3xl font-bold text-india-navy">Neural Ingestion</h2>
-                <p className="text-gray-500">Secure document processing powered by Indian AI Precision</p>
+                <p className="text-gray-500">Secure document processing powered by Ollama</p>
               </div>
 
               <div className="card-glass p-12 border-dashed border-2 border-india-saffron border-opacity-30 flex flex-col items-center justify-center text-center space-y-6 relative overflow-hidden">
@@ -294,26 +290,6 @@ const App = () => {
                       <h4 className="text-xl font-bold text-india-navy">Drop Missions Here</h4>
                       <p className="text-gray-400 text-sm mt-1">PDF, DOCX, PNG (Max 50MB)</p>
                     </div>
-                    <div className="flex flex-wrap gap-4 justify-center">
-                      <button
-                        onClick={() => setSelectedDocType('invoice')}
-                        className={`px-4 py-2 rounded-full text-xs font-bold transition-all ${selectedDocType === 'invoice' ? 'bg-india-saffron text-white' : 'bg-gray-100 text-gray-500'}`}
-                      >
-                        INVOICE
-                      </button>
-                      <button
-                        onClick={() => setSelectedDocType('contract')}
-                        className={`px-4 py-2 rounded-full text-xs font-bold transition-all ${selectedDocType === 'contract' ? 'bg-india-navy text-white' : 'bg-gray-100 text-gray-500'}`}
-                      >
-                        CONTRACT
-                      </button>
-                      <button
-                        onClick={() => setSelectedDocType('crac')}
-                        className={`px-4 py-2 rounded-full text-xs font-bold transition-all ${selectedDocType === 'crac' ? 'bg-india-green text-white' : 'bg-gray-100 text-gray-500'}`}
-                      >
-                        CRAC
-                      </button>
-                    </div>
                     <label className="btn-primary cursor-pointer">
                       Select Documents
                       <input type="file" className="hidden" onChange={handleFileUpload} />
@@ -333,12 +309,6 @@ const App = () => {
             >
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <h2 className="text-2xl font-bold text-india-navy">Mission Records</h2>
-                <div className="flex items-center gap-2 bg-white p-1 rounded-xl shadow-sm border border-gray-100">
-                  <FilterTab active={filterType === null} onClick={() => setFilterType(null)} label="All" />
-                  <FilterTab active={filterType === 'invoice'} onClick={() => setFilterType('invoice')} label="Invoices" />
-                  <FilterTab active={filterType === 'contract'} onClick={() => setFilterType('contract')} label="Contracts" />
-                  <FilterTab active={filterType === 'crac'} onClick={() => setFilterType('crac')} label="CRACs" />
-                </div>
               </div>
 
               <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
@@ -346,7 +316,6 @@ const App = () => {
                   <thead className="bg-[#f8f9fa] border-b border-gray-200">
                     <tr>
                       <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Document</th>
-                      <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Type</th>
                       <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Date</th>
                       <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Confidence</th>
                       <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider text-right">Action</th>
@@ -358,7 +327,6 @@ const App = () => {
                         <ResultRow
                           key={res.id}
                           name={res.file_name}
-                          type={res.doc_type}
                           date={new Date(res.processed_at).toLocaleString()}
                           confidence={(res.structured_data?.confidence * 100 || 95).toFixed(1) + '%'}
                           onView={() => setSelectedResult(res)}
@@ -367,7 +335,7 @@ const App = () => {
                       ))
                     ) : (
                       <tr>
-                        <td colSpan="5" className="px-6 py-12 text-center text-gray-400 font-medium uppercase tracking-widest text-xs">
+                        <td colSpan="4" className="px-6 py-12 text-center text-gray-400 font-medium uppercase tracking-widest text-xs">
                           No neural records found in this vault
                         </td>
                       </tr>
@@ -458,15 +426,6 @@ const StatCard = ({ label, value, icon, trend }) => (
     <div className="text-3xl font-black text-india-navy tracking-tight">{value}</div>
     <div className="text-gray-400 text-xs font-semibold uppercase tracking-widest mt-1">{label}</div>
   </div>
-);
-
-const FilterTab = ({ active, onClick, label }) => (
-  <button
-    onClick={onClick}
-    className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${active ? 'bg-india-navy text-white shadow-md' : 'text-gray-500 hover:bg-gray-50'}`}
-  >
-    {label.toUpperCase()}
-  </button>
 );
 
 const PreviewModal = ({ result, onClose }) => {
@@ -594,20 +553,13 @@ const PreviewModal = ({ result, onClose }) => {
   );
 };
 
-const ResultRow = ({ name, type, date, confidence, onView, onDelete }) => (
+const ResultRow = ({ name, date, confidence, onView, onDelete }) => (
   <tr className="hover:bg-gray-50 transition-colors group">
     <td className="px-6 py-4 flex items-center space-x-3">
       <div className="w-8 h-8 bg-gray-100 rounded flex items-center justify-center">
         <FileText size={16} className="text-gray-400" />
       </div>
       <span className="font-semibold text-india-navy text-sm max-w-[200px] truncate">{name}</span>
-    </td>
-    <td className="px-6 py-4">
-      <span className={`px-2 py-1 rounded-md text-[10px] font-bold uppercase ${type === 'invoice' ? 'bg-orange-50 text-orange-600' :
-        type === 'contract' ? 'bg-blue-50 text-blue-600' : 'bg-green-50 text-green-600'
-        }`}>
-        {type}
-      </span>
     </td>
     <td className="px-6 py-4 text-xs text-gray-500">{date}</td>
     <td className="px-6 py-4">

@@ -135,104 +135,112 @@ def extract_sections(clean_text: str) -> list[dict]:
 
 def structured_data_to_sections(structured_data: dict, doc_type: str) -> list[dict]:
     """
-    Convert structured extraction data into clean document sections
-    suitable for Word document generation.
+    Convert structured extraction data (generic or doc-specific) into
+    Word document sections.
+    Supports the new universal schema: document_metadata, fields,
+    tables, checkboxes, signatures, stamps, notes.
     """
     sections = []
 
-    # Title based on doc type
-    type_titles = {
-        "invoice": "Invoice Details",
-        "contract": "Contract Details",
-        "crac": "CRAC Document Details",
-    }
-    sections.append({"type": "heading", "text": type_titles.get(doc_type, "Document Details"), "level": 1})
+    # ── Document Title ──
+    sections.append({"type": "heading", "text": "Document Details", "level": 1})
 
     if not structured_data:
         sections.append({"type": "paragraph", "text": "No structured data extracted.", "level": 0})
         return sections
 
-    # ── Group fields into logical sections ──
-    field_groups = {
-        "invoice": {
-            "General Information": ["invoice_number", "invoice_date", "due_date", "currency", "payment_terms"],
-            "Vendor Details": ["vendor_name", "vendor_address", "vendor_gstin"],
-            "Customer Details": ["customer_name", "customer_address", "customer_gstin"],
-            "Financial Summary": ["subtotal", "tax_amount", "total_amount"],
-        },
-        "contract": {
-            "Contract Information": ["contract_title", "contract_number", "effective_date", "expiration_date", "governing_law"],
-            "Party 1": ["party_1_name", "party_1_role"],
-            "Party 2": ["party_2_name", "party_2_role"],
-            "Terms": ["contract_value", "currency", "payment_terms", "termination_clause_summary"],
-        },
-        "crac": {
-            "Document Information": ["document_title", "document_number", "date_issued"],
-            "Entity Details": ["entity_name", "entity_type", "entity_id"],
-            "Risk Assessment": ["risk_rating", "credit_score", "credit_limit", "outstanding_amount"],
-            "Compliance": ["compliance_status", "review_date", "reviewer_name", "approval_status"],
-        },
-    }
+    # ── Document Metadata ──
+    metadata = structured_data.get("document_metadata", {})
+    if not metadata:
+        # Fallback: check for top-level metadata keys
+        for k in ("document_type", "title", "date", "document_id", "issuing_organization", "involved_entities"):
+            if structured_data.get(k):
+                metadata[k] = structured_data[k]
 
-    groups = field_groups.get(doc_type, {})
-    used_keys = set()
-
-    for group_name, field_keys in groups.items():
-        group_has_data = False
-        group_fields = []
-
-        for key in field_keys:
-            value = structured_data.get(key)
-            if value is not None and value != "" and value != "null":
-                group_has_data = True
+    if metadata:
+        sections.append({"type": "heading", "text": "Document Information", "level": 2})
+        for key, value in metadata.items():
+            if value is not None and value not in ("", "null"):
                 label = key.replace("_", " ").title()
-                group_fields.append({"label": label, "value": str(value)})
-                used_keys.add(key)
+                sections.append({"type": "key_value", "label": label, "value": str(value),
+                                  "text": f"{label}: {value}", "level": 0})
 
-        if group_has_data:
-            sections.append({"type": "heading", "text": group_name, "level": 2})
-            for field in group_fields:
-                sections.append({
-                    "type": "key_value",
-                    "text": f"{field['label']}: {field['value']}",
-                    "label": field["label"],
-                    "value": field["value"],
-                    "level": 0,
-                })
+    # ── Form Fields ──
+    fields = structured_data.get("fields", {})
+    if fields and isinstance(fields, dict):
+        sections.append({"type": "heading", "text": "Fields", "level": 2})
+        for key, value in fields.items():
+            if value is not None and value not in ("", "null"):
+                label = key.replace("_", " ").title()
+                sections.append({"type": "key_value", "label": label, "value": str(value),
+                                  "text": f"{label}: {value}", "level": 0})
 
-    # ── Handle list fields (line_items, key_obligations, etc.) ──
-    list_fields = {
-        "line_items": "Line Items",
-        "key_obligations": "Key Obligations",
-        "key_findings": "Key Findings",
-        "recommendations": "Recommendations",
-    }
-    for key, title in list_fields.items():
-        value = structured_data.get(key)
-        if value and isinstance(value, list) and len(value) > 0:
-            used_keys.add(key)
-            sections.append({"type": "heading", "text": title, "level": 2})
-            if isinstance(value[0], dict):
-                # Table data (e.g. line items)
-                sections.append({"type": "table", "data": value, "level": 0, "text": ""})
+    # ── Tables ──
+    tables = structured_data.get("tables", [])
+    if tables and isinstance(tables, list):
+        for tbl in tables:
+            table_name = tbl.get("table_name", "Table") if isinstance(tbl, dict) else "Table"
+            rows = tbl.get("rows", tbl) if isinstance(tbl, dict) else tbl
+            if rows and isinstance(rows, list):
+                sections.append({"type": "heading", "text": table_name, "level": 2})
+                sections.append({"type": "table", "data": rows, "level": 0, "text": ""})
+
+    # ── Checkboxes ──
+    checkboxes = structured_data.get("checkboxes", {})
+    if checkboxes and isinstance(checkboxes, dict):
+        sections.append({"type": "heading", "text": "Checkboxes / Options", "level": 2})
+        for key, value in checkboxes.items():
+            label = key.replace("_", " ").title()
+            checked = "[✓]" if value else "[ ]"
+            sections.append({"type": "key_value", "label": label, "value": str(value),
+                              "text": f"{checked} {label}", "level": 0})
+
+    # ── Signatures ──
+    signatures = structured_data.get("signatures", [])
+    if signatures:
+        sections.append({"type": "heading", "text": "Signatures", "level": 2})
+        for sig in signatures:
+            if isinstance(sig, dict):
+                sig_label = sig.get("label", "Signature")
+                present = sig.get("present", True)
+                sections.append({"type": "paragraph",
+                                  "text": f"{sig_label}: {'__________________' if present else 'N/A'}",
+                                  "level": 0})
             else:
-                for item in value:
-                    if item and str(item).strip():
-                        sections.append({"type": "list_item", "text": str(item).strip(), "level": 0})
+                sections.append({"type": "paragraph", "text": f"Signature: {sig}", "level": 0})
 
-    # ── Remaining fields ──
+    # ── Stamps ──
+    stamps = structured_data.get("stamps", [])
+    if stamps:
+        sections.append({"type": "heading", "text": "Stamps & Seals", "level": 2})
+        for stamp in stamps:
+            sections.append({"type": "paragraph", "text": f"[STAMP: {stamp}]", "level": 0})
+
+    # ── Notes ──
+    notes = structured_data.get("notes", [])
+    if notes:
+        sections.append({"type": "heading", "text": "Notes", "level": 2})
+        for note in notes:
+            sections.append({"type": "list_item", "text": str(note), "level": 0})
+
+    # ── Remaining unhandled top-level fields ──
+    known_keys = {"document_metadata", "fields", "tables", "checkboxes",
+                  "signatures", "stamps", "notes",
+                  "document_type", "title", "date", "document_id",
+                  "issuing_organization", "involved_entities"}
     remaining = {k: v for k, v in structured_data.items()
-                 if k not in used_keys and not k.startswith("_")
-                 and v is not None and v != "" and v != "null"}
+                 if k not in known_keys and not k.startswith("_")
+                 and v is not None and v not in ("", "null")}
     if remaining:
         sections.append({"type": "heading", "text": "Additional Information", "level": 2})
         for key, value in remaining.items():
             label = key.replace("_", " ").title()
             if isinstance(value, (list, dict)):
                 sections.append({"type": "key_value", "label": label,
-                                 "value": str(value), "text": f"{label}: {value}", "level": 0})
+                                  "value": str(value), "text": f"{label}: {value}", "level": 0})
             else:
                 sections.append({"type": "key_value", "label": label,
-                                 "value": str(value), "text": f"{label}: {value}", "level": 0})
+                                  "value": str(value), "text": f"{label}: {value}", "level": 0})
 
     return sections
+

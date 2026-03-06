@@ -23,16 +23,15 @@ class OllamaOCRClient:
     def __init__(
         self,
         base_url: str = "http://localhost:11434",
-        # model: str = "mistral-small3.1:24b-2503-fp16",
-        model: str = "ministral-3:14b",
+        ocr_model: str = "ministral-3:14b",
         timeout: int = 300,
     ):
         self.base_url = base_url.rstrip("/")
-        self.model = model
+        self.ocr_model = ocr_model
         self.timeout = timeout
         logger.info(
             "OllamaOCRClient initialized",
-            extra={"model": model, "ollama_url": base_url},
+            extra={"ocr_model": ocr_model, "ollama_url": base_url},
         )
 
     def _encode_image(self, image_path: str) -> str:
@@ -59,9 +58,9 @@ class OllamaOCRClient:
         images_b64 = [self._encode_image(p) for p in image_paths]
 
         payload = {
-            "model": self.model,
+            "model": self.ocr_model,
             "prompt": prompt,
-            "images": images_b64,
+            "images": images_b64 if images_b64 else [],
             "stream": False,
             "options": {
                 "temperature": 0.1,
@@ -113,99 +112,177 @@ class OllamaOCRClient:
     def extract_raw_text(self, image_path: str) -> str:
         """Extract all visible text from an image using OCR."""
         prompt = (
-            "You are an OCR system. Extract ALL text visible in this document image. "
-            "Maintain the original formatting and structure as much as possible. "
-            "Include headers, body text, tables, footnotes, and any other text elements. "
-            "Do not add any commentary or explanation — output ONLY the extracted text."
+            "You are a high-accuracy OCR and document transcription system.\n\n"
+            "Your task is to transcribe ALL visible text from the provided document image.\n\n"
+
+            "### Document Types You May Encounter\n"
+            "- Printed documents\n"
+            "- Handwritten notes or forms\n"
+            "- Forms with fields and labels\n"
+            "- Tables and structured layouts\n"
+            "- Signatures and initials\n"
+            "- Checkboxes or radio buttons\n"
+            "- Stamps or seals\n\n"
+
+            "### Transcription Rules\n"
+            "1. Extract ALL readable text exactly as it appears.\n"
+            "2. Preserve the layout and structure where possible.\n"
+            "3. Maintain line breaks and spacing.\n"
+            "4. Represent tables using rows and columns aligned in plain text.\n"
+            "5. For checkboxes:\n"
+            "   - [x] if checked\n"
+            "   - [ ] if unchecked\n"
+            "6. If a signature is present, write: [Signature]\n"
+            "7. If handwritten text appears, transcribe it as written.\n"
+            "8. If text is unclear, mark it as [illegible].\n\n"
+
+            "Output ONLY the transcription. Do not explain anything."
         )
         return self._call_ollama(prompt, [image_path], step="raw_text_extraction")
 
     def extract_structured_data(self, image_path: str, doc_type: str) -> dict:
         """Extract structured key-value data from a document image."""
+
         schema_prompts = {
-            "invoice": (
-                "You are a document data extraction system. Analyze this invoice image and "
-                "extract the following fields into a JSON object. If a field is not found, "
-                'use null. Output ONLY valid JSON, no markdown fences or explanation.\n\n'
-                "Fields to extract:\n"
-                '{\n'
-                '  "invoice_number": "string",\n'
-                '  "invoice_date": "string (YYYY-MM-DD if possible)",\n'
-                '  "due_date": "string or null",\n'
-                '  "vendor_name": "string",\n'
-                '  "vendor_address": "string or null",\n'
-                '  "vendor_gstin": "string or null",\n'
-                '  "customer_name": "string",\n'
-                '  "customer_address": "string or null",\n'
-                '  "customer_gstin": "string or null",\n'
-                '  "subtotal": "number or null",\n'
-                '  "tax_amount": "number or null",\n'
-                '  "total_amount": "number",\n'
-                '  "currency": "string (e.g. INR, USD)",\n'
-                '  "payment_terms": "string or null",\n'
-                '  "line_items": [\n'
-                '    {\n'
-                '      "description": "string",\n'
-                '      "quantity": "number",\n'
-                '      "unit_price": "number",\n'
-                '      "amount": "number"\n'
-                '    }\n'
-                '  ]\n'
-                '}'
-            ),
-            "contract": (
-                "You are a document data extraction system. Analyze this contract/agreement "
-                "image and extract the following fields into a JSON object. If a field is not "
-                'found, use null. Output ONLY valid JSON, no markdown fences or explanation.\n\n'
-                "Fields to extract:\n"
-                '{\n'
-                '  "contract_title": "string",\n'
-                '  "contract_number": "string or null",\n'
-                '  "effective_date": "string (YYYY-MM-DD if possible)",\n'
-                '  "expiration_date": "string or null",\n'
-                '  "party_1_name": "string",\n'
-                '  "party_1_role": "string (e.g. Client, Employer)",\n'
-                '  "party_2_name": "string",\n'
-                '  "party_2_role": "string (e.g. Vendor, Contractor)",\n'
-                '  "contract_value": "number or null",\n'
-                '  "currency": "string or null",\n'
-                '  "payment_terms": "string or null",\n'
-                '  "governing_law": "string or null",\n'
-                '  "termination_clause_summary": "string or null",\n'
-                '  "key_obligations": ["string"],\n'
-                '  "signatures_present": "boolean"\n'
-                '}'
-            ),
-            "crac": (
-                "You are a document data extraction system. Analyze this CRAC (Credit Risk "
-                "Assessment/Compliance) document image and extract the following fields into "
-                'a JSON object. If a field is not found, use null. Output ONLY valid JSON, '
-                'no markdown fences or explanation.\n\n'
-                "Fields to extract:\n"
-                '{\n'
-                '  "document_title": "string",\n'
-                '  "document_number": "string or null",\n'
-                '  "date_issued": "string (YYYY-MM-DD if possible)",\n'
-                '  "entity_name": "string",\n'
-                '  "entity_type": "string (e.g. Individual, Company)",\n'
-                '  "entity_id": "string or null",\n'
-                '  "risk_rating": "string or null",\n'
-                '  "credit_score": "string or null",\n'
-                '  "credit_limit": "number or null",\n'
-                '  "outstanding_amount": "number or null",\n'
-                '  "compliance_status": "string or null",\n'
-                '  "review_date": "string or null",\n'
-                '  "reviewer_name": "string or null",\n'
-                '  "key_findings": ["string"],\n'
-                '  "recommendations": ["string"],\n'
-                '  "approval_status": "string or null"\n'
-                '}'
-            ),
+            "document": (
+                "You are an expert document intelligence and information extraction system.\n"
+                "Analyze the provided document image and extract all information into structured JSON.\n\n"
+
+                "The document may include:\n"
+                "- Printed or handwritten text\n"
+                "- Forms with labeled fields\n"
+                "- Tables\n"
+                "- Checkboxes or radio buttons\n"
+                "- Signatures\n"
+                "- Stamps or seals\n\n"
+
+                "### Extraction Rules\n"
+
+                "1. GENERAL METADATA\n"
+                "Extract high-level document information:\n"
+                "- document_type\n"
+                "- title\n"
+                "- date\n"
+                "- document_id\n"
+                "- issuing_organization\n"
+                "- involved_entities\n\n"
+
+                "2. FORM FIELDS\n"
+                "Extract all label-value pairs from the document.\n"
+                "Example:\n"
+                "Name: John Smith\n"
+                "Address: 21 Baker Street\n\n"
+
+                "Return them as:\n"
+                '"fields": {\n'
+                '  "name": "John Smith",\n'
+                '  "address": "21 Baker Street"\n'
+                "}\n\n"
+
+                "3. TABLES\n"
+                "Detect tables and return them as arrays of objects.\n"
+                "Use column headers when available.\n"
+                "Example:\n"
+                '"tables": [\n'
+                "  {\n"
+                '    "table_name": "items",\n'
+                '    "rows": [\n'
+                '      {"item": "Pen", "qty": 10, "price": 2.5}\n'
+                "    ]\n"
+                "  }\n"
+                "]\n\n"
+
+                "4. CHECKBOXES AND RADIO BUTTONS\n"
+                "Return checkbox states as boolean values.\n"
+                "Example:\n"
+                '"checkboxes": {\n'
+                '  "terms_accepted": true,\n'
+                '  "subscribe_newsletter": false\n'
+                "}\n\n"
+
+                "5. HANDWRITTEN TEXT\n"
+                "Transcribe handwritten text exactly as seen.\n"
+                "If uncertain, include best guess and mark with '(uncertain)'.\n\n"
+
+                "6. SIGNATURES\n"
+                "If a signature is present, return:\n"
+                '"signatures": [\n'
+                '  {\n'
+                '    "label": "Applicant Signature",\n'
+                '    "present": true\n'
+                "  }\n"
+                "]\n\n"
+
+                "7. STAMPS / SEALS\n"
+                "If an official stamp or seal is visible:\n"
+                '"stamps": ["Company Seal", "Approved Stamp"]\n\n'
+
+                "8. MISSING DATA\n"
+                "If a value cannot be determined, return null.\n\n"
+
+                "### JSON STRUCTURE\n"
+                "Return a clean JSON object structured like this:\n\n"
+
+                "{\n"
+                '  "document_metadata": {},\n'
+                '  "fields": {},\n'
+                '  "tables": [],\n'
+                '  "checkboxes": {},\n'
+                '  "signatures": [],\n'
+                '  "stamps": [],\n'
+                '  "notes": []\n'
+                "}\n\n"
+
+                "### OUTPUT RULES\n"
+                "- Output ONLY valid JSON\n"
+                "- No markdown\n"
+                "- No explanations\n"
+                "- No code fences\n"
+            )
         }
 
-        prompt = schema_prompts.get(doc_type, schema_prompts["invoice"])
+        prompt = schema_prompts.get(doc_type, schema_prompts["document"])
         raw_response = self._call_ollama(prompt, [image_path], step="structured_extraction")
         return self._parse_json_response(raw_response)
+
+    def detect_layout(self, image_path: str) -> dict:
+        """
+        Stage: Layout Detection.
+        Analyzes the document image to determine its structural layout
+        before detailed extraction — helps guide the extraction pipeline.
+        Returns a dict with layout metadata.
+        """
+        prompt = (
+            "You are a document layout analysis system.\n"
+            "Analyze the provided document image and identify its structural layout.\n\n"
+            "### Detect and return the following:\n"
+            "1. document_type: What kind of document is this? (e.g. invoice, form, contract, ID, receipt, medical report, table, etc.)\n"
+            "2. layout_type: Describe the layout (e.g. single-column, multi-column, table-heavy, form-based, handwritten, mixed)\n"
+            "3. has_tables: true/false — does the document contain data tables?\n"
+            "4. has_handwriting: true/false — is any handwriting present?\n"
+            "5. has_checkboxes: true/false — are there any checkboxes or radio buttons?\n"
+            "6. has_signatures: true/false — are signatures present?\n"
+            "7. has_stamps: true/false — are official stamps or seals visible?\n"
+            "8. page_orientation: portrait or landscape\n"
+            "9. language: detected language(s)\n"
+            "10. notes: any other notable layout features\n\n"
+            "Return ONLY valid JSON. No markdown. No explanations.\n\n"
+            "Example:\n"
+            "{\n"
+            '  "document_type": "invoice",\n'
+            '  "layout_type": "form-based",\n'
+            '  "has_tables": true,\n'
+            '  "has_handwriting": false,\n'
+            '  "has_checkboxes": false,\n'
+            '  "has_signatures": true,\n'
+            '  "has_stamps": false,\n'
+            '  "page_orientation": "portrait",\n'
+            '  "language": "English",\n'
+            '  "notes": "Two-column layout with line items table"\n'
+            "}"
+        )
+        raw = self._call_ollama(prompt, [image_path], step="layout_detection")
+        return self._parse_json_response(raw)
 
     def _parse_json_response(self, response: str) -> dict:
         """Parse JSON from model response, handling common formatting issues."""
@@ -237,16 +314,17 @@ class OllamaOCRClient:
         return {"_raw_response": text, "_parse_error": "Could not extract valid JSON from response"}
 
     def health_check(self) -> dict:
-        """Check if Ollama is running and the model is available. Returns status dict."""
+        """Check if Ollama is running and the OCR model is available."""
         try:
             resp = requests.get(f"{self.base_url}/api/tags", timeout=10)
             resp.raise_for_status()
             models = resp.json().get("models", [])
             model_names = [m.get("name", "") for m in models]
-            model_found = any(self.model in name or name in self.model for name in model_names)
+            ocr_ok = any(self.ocr_model in n or n in self.ocr_model for n in model_names)
             return {
                 "ollama_reachable": True,
-                "model_available": model_found,
+                "ocr_model_available": ocr_ok,
+                "model_available": ocr_ok,
                 "available_models": model_names,
             }
         except requests.exceptions.ConnectionError:

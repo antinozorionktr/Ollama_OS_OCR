@@ -10,9 +10,7 @@ from enum import Enum
 # ─── Enums ───
 
 class DocType(str, Enum):
-    invoice = "invoice"
-    contract = "contract"
-    crac = "crac"
+    document = "document"
 
 
 class BatchStatus(str, Enum):
@@ -35,9 +33,7 @@ class HealthResponse(BaseModel):
 # ─── Folder / Stats ───
 
 class FolderStatsResponse(BaseModel):
-    invoice: int = 0
-    contract: int = 0
-    crac: int = 0
+    document: int = 0
     total_files: int = 0
     processed_count: dict[str, int] = {}
 
@@ -58,6 +54,7 @@ class OCRResultResponse(BaseModel):
     doc_type: str
     raw_text: Optional[str] = None
     clean_text: Optional[str] = None
+    formatted_text: Optional[str] = None
     structured_data: dict = {}
     page_count: int = 0
     processing_time_seconds: Optional[float] = None
@@ -79,7 +76,7 @@ class DeleteResponse(BaseModel):
 # ─── Processing ───
 
 class ProcessFileRequest(BaseModel):
-    doc_type: DocType = DocType.invoice
+    doc_type: DocType = DocType.document
     extract_raw: bool = True
     extract_structured: bool = True
 
@@ -96,7 +93,7 @@ class ProcessResponse(BaseModel):
 # ─── Batch ───
 
 class BatchStartRequest(BaseModel):
-    doc_types: list[DocType] = [DocType.invoice, DocType.contract, DocType.crac]
+    doc_types: list[DocType] = [DocType.document]
     extract_raw: bool = True
     extract_structured: bool = True
 
@@ -163,7 +160,5 @@ class WSBatchUpdate(BaseModel):
 
 class ConfigResponse(BaseModel):
     ollama_base_url: str
-    ollama_model: str
-    invoice_dir: str
-    contract_dir: str
-    crac_dir: str
+    ocr_model: str
+    document_dir: str

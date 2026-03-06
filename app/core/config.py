@@ -10,14 +10,12 @@ from functools import lru_cache
 class Settings(BaseSettings):
     # ── Ollama ──
     ollama_base_url: str = "http://localhost:11434"
-    # ollama_model: str = "mistral-small3.1:24b-2503-fp16"
-    ollama_model: str = "ministral-3:14b"
+    ocr_model: str = "ministral-3:14b"
+
     ollama_timeout: int = 300
 
     # ── Data folders ──
-    invoice_dir: str = "/data/Invoice"
-    contract_dir: str = "/data/Contract"
-    crac_dir: str = "/data/Crac"
+    document_dir: str = "/data/Documents"
 
     # ── Storage ──
     db_path: str = "/app/data/docvision.db"
@@ -26,13 +24,15 @@ class Settings(BaseSettings):
 
     # ── Server ──
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = 8004
     cors_origins: str = "*"
 
-    class Config:
-        env_prefix = ""
-        case_sensitive = False
-        env_file = ".env"
+    model_config = {
+        "env_file": ".env",
+        "env_prefix": "",
+        "case_sensitive": False,
+        "extra": "ignore"
+    }
 
 
 @lru_cache()

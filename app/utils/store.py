@@ -57,6 +57,7 @@ class PersistentStore:
                     file_path   TEXT NOT NULL,
                     doc_type    TEXT NOT NULL,
                     raw_text    TEXT,
+                    formatted_text TEXT,
                     structured_data TEXT,
                     page_count  INTEGER DEFAULT 0,
                     processing_time_seconds REAL,
@@ -111,14 +112,15 @@ class PersistentStore:
         with self._cursor() as cur:
             cur.execute("""
                 INSERT INTO results (file_name, file_path, doc_type, raw_text,
-                    structured_data, page_count, processing_time_seconds, error,
+                    formatted_text, structured_data, page_count, processing_time_seconds, error,
                     processed_at, batch_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 result.get("file_name", ""),
                 result.get("file_path", ""),
                 result.get("doc_type", ""),
                 result.get("raw_text", ""),
+                result.get("formatted_text", ""),
                 json.dumps(result.get("structured_data", {})),
                 result.get("page_count", 0),
                 result.get("processing_time_seconds"),

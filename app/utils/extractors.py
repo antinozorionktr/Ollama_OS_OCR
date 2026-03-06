@@ -13,6 +13,7 @@ from typing import Optional
 from app.utils.ollama_client import OllamaOCRClient
 from app.utils.pdf_handler import pdf_to_images
 from app.utils.logger import setup_logger
+from app.utils.docx_generator import generate_docx_for_result
 
 logger = setup_logger("docvision.extractor")
 
@@ -31,7 +32,7 @@ class StructuredExtractor:
     def process_document(
         self,
         file_path: str,
-        doc_type: str = "invoice",
+        doc_type: str = "document",
         extract_raw: bool = True,
         extract_structured: bool = True,
         on_progress: Optional[callable] = None,
@@ -59,6 +60,7 @@ class StructuredExtractor:
         result = {
             "raw_text": "",
             "structured_data": {},
+            "layout_info": {},
             "page_count": 0,
             "pages": [],
         }
@@ -112,8 +114,24 @@ class StructuredExtractor:
                 )
                 
                 if on_progress:
-                    base_progress = 15 + (page_idx * (80 // len(image_paths)))
+                    base_progress = 15 + (page_idx * (70 // len(image_paths)))
                     on_progress({"step": "page_start", "progress_pct": base_progress, "message": f"Analyzing segment {page_num}/{len(image_paths)}..."})
+
+                # ── Stage: Layout Detection ──
+                logger.debug(f"Detecting layout: page {page_num}", extra={"step": "layout_detection"})
+                layout_start = time.time()
+                layout_info = self.client.detect_layout(img_path)
+                layout_dur = round(time.time() - layout_start, 2)
+                page_result["layout_info"] = layout_info
+                if page_idx == 0:
+                    result["layout_info"] = layout_info  # store first page layout as document-level
+                logger.info(
+                    f"Layout detected: page {page_num} | {layout_dur}s | type={layout_info.get('document_type', '?')}",
+                    extra={"file_name": file_name, "page": page_num, "duration_s": layout_dur, "step": "layout_detection", "status": "done"},
+                )
+                if on_progress:
+                    progress = 15 + (page_idx * (70 // len(image_paths))) + (25 // len(image_paths))
+                    on_progress({"step": "layout_done", "progress_pct": progress, "message": f"Layout mapped for segment {page_num}"})
 
                 # Raw text extraction
                 if extract_raw:
@@ -179,6 +197,31 @@ class StructuredExtractor:
 
             result["raw_text"] = "\n\n".join(all_raw_text)
             result["structured_data"] = all_structured
+
+            # ─── Stage: Auto-Generate Word Document ───
+            if all_structured:
+                logger.info(f"Generating Word document: {file_name}", extra={"step": "docx_generate"})
+                if on_progress:
+                    on_progress({"step": "docx_start", "progress_pct": 92, "message": "Generating Word document..."})
+
+                try:
+                    # Build a minimal result dict for the generator
+                    docx_input = {
+                        "file_name": file_name,
+                        "doc_type": doc_type,
+                        "processed_at": __import__('datetime').datetime.now().isoformat(),
+                        "raw_text": result["raw_text"],
+                        "structured_data": all_structured,
+                    }
+                    docx_path = generate_docx_for_result(docx_input)
+                    result["docx_path"] = docx_path
+                    logger.info(
+                        f"Word document generated: {docx_path}",
+                        extra={"file_name": file_name, "step": "docx_generate", "status": "done"}
+                    )
+                except Exception as e:
+                    logger.error(f"Word generation failed: {e}", extra={"step": "docx_generate", "error": str(e)})
+                    result["docx_path"] = None
 
         finally:
             if cleanup_images:

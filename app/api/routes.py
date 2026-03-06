@@ -43,7 +43,10 @@ router = APIRouter()
 async def health_check():
     """Check API, Ollama, and database health."""
     settings = get_settings()
-    client = OllamaOCRClient(base_url=settings.ollama_base_url, model=settings.ollama_model)
+    client = OllamaOCRClient(
+        base_url=settings.ollama_base_url,
+        ocr_model=settings.ocr_model,
+    )
     health = client.health_check()
     store = get_store()
     db_ok = True
@@ -67,10 +70,8 @@ async def get_config():
     s = get_settings()
     return ConfigResponse(
         ollama_base_url=s.ollama_base_url,
-        ollama_model=s.ollama_model,
-        invoice_dir=s.invoice_dir,
-        contract_dir=s.contract_dir,
-        crac_dir=s.crac_dir,
+        ocr_model=s.ocr_model,
+        document_dir=s.document_dir,
     )
 
 
@@ -80,33 +81,24 @@ async def get_config():
 
 @router.get("/stats", response_model=FolderStatsResponse, tags=["Stats"])
 async def get_stats():
-    """Get file counts per folder and processed counts."""
+    """Get file counts in universal vault and processed counts."""
     settings = get_settings()
     store = get_store()
-    inv = list_files(settings.invoice_dir)
-    con = list_files(settings.contract_dir)
-    crac = list_files(settings.crac_dir)
+    docs = list_files(settings.document_dir)
     processed = store.get_results_count()
 
     return FolderStatsResponse(
-        invoice=len(inv),
-        contract=len(con),
-        crac=len(crac),
-        total_files=len(inv) + len(con) + len(crac),
+        document=len(docs),
+        total_files=len(docs),
         processed_count=processed,
     )
 
 
 @router.get("/folders/{doc_type}", response_model=FolderFilesResponse, tags=["Stats"])
 async def get_folder_files(doc_type: DocType):
-    """List all supported files in a folder."""
+    """List all supported files in the vault."""
     settings = get_settings()
-    folder_map = {
-        "invoice": settings.invoice_dir,
-        "contract": settings.contract_dir,
-        "crac": settings.crac_dir,
-    }
-    folder = folder_map[doc_type.value]
+    folder = settings.document_dir
     files = list_files(folder)
     return FolderFilesResponse(
         doc_type=doc_type.value,
@@ -142,6 +134,7 @@ async def get_results(
             doc_type=r.get("doc_type", ""),
             raw_text=r.get("raw_text"),
             clean_text=clean,
+            formatted_text=r.get("formatted_text"),
             structured_data=r.get("structured_data", {}),
             page_count=r.get("page_count", 0),
             processing_time_seconds=r.get("processing_time_seconds"),
@@ -169,6 +162,7 @@ async def get_result(result_id: int):
         doc_type=result.get("doc_type", ""),
         raw_text=result.get("raw_text"),
         clean_text=clean,
+        formatted_text=result.get("formatted_text"),
         structured_data=result.get("structured_data", {}),
         page_count=result.get("page_count", 0),
         processing_time_seconds=result.get("processing_time_seconds"),
@@ -219,7 +213,7 @@ async def delete_result(result_id: int):
 @router.post("/process/upload", response_model=ProcessResponse, tags=["Processing"])
 async def process_uploaded_file(
     file: UploadFile = File(...),
-    doc_type: DocType = Query(DocType.invoice),
+    doc_type: DocType = Query(DocType.document),
     extract_raw: bool = Query(True),
     extract_structured: bool = Query(True),
 ):
@@ -231,12 +225,7 @@ async def process_uploaded_file(
     if ext not in SUPPORTED_EXTENSIONS:
         raise HTTPException(400, f"Unsupported file type: {ext}. Supported: {SUPPORTED_EXTENSIONS}")
 
-    doc_dir_map = {
-        DocType.invoice: settings.invoice_dir,
-        DocType.contract: settings.contract_dir,
-        DocType.crac: settings.crac_dir,
-    }
-    target_dir = doc_dir_map.get(doc_type, settings.invoice_dir)
+    target_dir = settings.document_dir
     os.makedirs(target_dir, exist_ok=True)
 
     # Save to permanent storage
@@ -255,7 +244,7 @@ async def process_uploaded_file(
     try:
         client = OllamaOCRClient(
             base_url=settings.ollama_base_url,
-            model=settings.ollama_model,
+            ocr_model=settings.ocr_model,
             timeout=settings.ollama_timeout,
         )
         extractor = StructuredExtractor(client)
@@ -298,7 +287,7 @@ async def process_uploaded_file(
 @router.post("/process/path", response_model=ProcessResponse, tags=["Processing"])
 async def process_file_by_path(
     file_path: str = Query(..., description="Absolute path to file on server"),
-    doc_type: DocType = Query(DocType.invoice),
+    doc_type: DocType = Query(DocType.document),
     extract_raw: bool = Query(True),
     extract_structured: bool = Query(True),
 ):
@@ -309,7 +298,7 @@ async def process_file_by_path(
     settings = get_settings()
     client = OllamaOCRClient(
         base_url=settings.ollama_base_url,
-        model=settings.ollama_model,
+        ocr_model=settings.ocr_model,
         timeout=settings.ollama_timeout,
     )
     extractor = StructuredExtractor(client)

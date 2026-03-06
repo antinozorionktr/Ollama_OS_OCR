@@ -94,15 +94,10 @@ def start_batch(
     settings = get_settings()
     store = get_store()
 
-    folder_map = {
-        "invoice": settings.invoice_dir,
-        "contract": settings.contract_dir,
-        "crac": settings.crac_dir,
-    }
+    folder = settings.document_dir
 
     files_to_process = []
     for doc_type in doc_types:
-        folder = folder_map.get(doc_type, "")
         for fp in list_files(folder):
             files_to_process.append((fp, doc_type))
 
@@ -111,7 +106,7 @@ def start_batch(
 
     batch_id = f"batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     store.create_batch(batch_id, files_to_process, config={
-        "model": settings.ollama_model,
+        "model": settings.ocr_model,
         "ollama_url": settings.ollama_base_url,
         "extract_raw": extract_raw,
         "extract_structured": extract_structured,
@@ -183,7 +178,7 @@ def _run_batch_thread(
     store = get_store()
     client = OllamaOCRClient(
         base_url=settings.ollama_base_url,
-        model=settings.ollama_model,
+        ocr_model=settings.ocr_model,
         timeout=settings.ollama_timeout,
     )
     extractor = StructuredExtractor(client)

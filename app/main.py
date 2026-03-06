@@ -19,9 +19,8 @@ settings = get_settings()
 app = FastAPI(
     title="DocVision OCR API",
     description=(
-        "REST API for document OCR processing using Mistral Vision via Ollama. "
-        "Supports invoices, contracts, and CRAC documents with text extraction, "
-        "structured data parsing, and Word document generation."
+        "REST API for universal document OCR and data extraction using Vision models via Ollama. "
+        "Supports complex forms, tables, checkboxes, and handwriting with structured JSON extraction."
     ),
     version="3.0.0",
     docs_url="/docs",
@@ -48,8 +47,8 @@ async def startup():
     logger.info("DocVision OCR API starting up")
     store = get_store()
     store.interrupt_active_batches()
-    logger.info(f"Ollama: {settings.ollama_base_url} | Model: {settings.ollama_model}")
-    logger.info(f"Folders: invoice={settings.invoice_dir}, contract={settings.contract_dir}, crac={settings.crac_dir}")
+    logger.info(f"Ollama: {settings.ollama_base_url} | Model: {settings.ocr_model}")
+    logger.info(f"Vault: {settings.document_dir}")
     logger.info("API ready at /docs")
 
 
