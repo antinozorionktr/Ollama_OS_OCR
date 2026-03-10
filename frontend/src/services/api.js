@@ -5,8 +5,8 @@ const getBackendPort = () => {
     const currentPort = window.location.port;
     const isFrontendDev = ['5173', '5174', '5175', '5176', '5177', '5178', '5179', '3000', '3001'].includes(currentPort);
 
-    if (isFrontendDev) return '8004';
-    return currentPort || '8004';
+    if (isFrontendDev) return '8005';
+    return currentPort || '8005';
 };
 
 export const BACKEND_PORT = getBackendPort();
