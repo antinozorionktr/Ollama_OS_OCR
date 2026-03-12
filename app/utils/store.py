@@ -59,6 +59,7 @@ class PersistentStore:
                     raw_text    TEXT,
                     formatted_text TEXT,
                     structured_data TEXT,
+                    tokens      TEXT,
                     page_count  INTEGER DEFAULT 0,
                     processing_time_seconds REAL,
                     error       TEXT,
@@ -98,6 +99,14 @@ class PersistentStore:
                 )
             """)
 
+            # ── Schema migrations: add columns that may be missing in older DBs ──
+            cur.execute("PRAGMA table_info(results)")
+            existing_columns = {row[1] for row in cur.fetchall()}
+            if "tokens" not in existing_columns:
+                cur.execute("ALTER TABLE results ADD COLUMN tokens TEXT")
+            if "formatted_text" not in existing_columns:
+                cur.execute("ALTER TABLE results ADD COLUMN formatted_text TEXT")
+
             # ── Index for fast lookups ──
             cur.execute("CREATE INDEX IF NOT EXISTS idx_results_batch ON results(batch_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_queue_batch ON batch_queue(batch_id)")
@@ -112,9 +121,9 @@ class PersistentStore:
         with self._cursor() as cur:
             cur.execute("""
                 INSERT INTO results (file_name, file_path, doc_type, raw_text,
-                    formatted_text, structured_data, page_count, processing_time_seconds, error,
+                    formatted_text, structured_data, tokens, page_count, processing_time_seconds, error,
                     processed_at, batch_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 result.get("file_name", ""),
                 result.get("file_path", ""),
@@ -122,6 +131,7 @@ class PersistentStore:
                 result.get("raw_text", ""),
                 result.get("formatted_text", ""),
                 json.dumps(result.get("structured_data", {})),
+                json.dumps(result.get("tokens", [])),
                 result.get("page_count", 0),
                 result.get("processing_time_seconds"),
                 result.get("error"),
@@ -167,20 +177,26 @@ class PersistentStore:
             cur.execute("DELETE FROM batch_queue")
             cur.execute("DELETE FROM batches")
 
-    def is_file_processed(self, file_path: str, batch_id: Optional[str] = None) -> bool:
-        """Check if a file has already been successfully processed."""
+            return cur.fetchone() is not None
+
+    def update_result_structured(self, result_id: int, structured_data: dict, tokens: list = None, error: str = None):
+        """Update a result with structured extraction data and tokens."""
         with self._cursor() as cur:
-            if batch_id:
+            if error:
                 cur.execute(
-                    "SELECT 1 FROM results WHERE file_path = ? AND batch_id = ? AND error IS NULL LIMIT 1",
-                    (file_path, batch_id),
+                    "UPDATE results SET error = ? WHERE id = ?",
+                    (error, result_id)
                 )
             else:
-                cur.execute(
-                    "SELECT 1 FROM results WHERE file_path = ? AND error IS NULL LIMIT 1",
-                    (file_path,),
-                )
-            return cur.fetchone() is not None
+                cur.execute("""
+                    UPDATE results 
+                    SET structured_data = ?, tokens = ?, error = NULL
+                    WHERE id = ?
+                """, (
+                    json.dumps(structured_data),
+                    json.dumps(tokens) if tokens else None,
+                    result_id
+                ))
 
     # ─────────────────────────────────────
     # BATCH MANAGEMENT
@@ -336,6 +352,15 @@ class PersistentStore:
                 d["structured_data"] = {}
         else:
             d["structured_data"] = {}
+        
+        if d.get("tokens"):
+            try:
+                d["tokens"] = json.loads(d["tokens"])
+            except (json.JSONDecodeError, TypeError):
+                d["tokens"] = []
+        else:
+            d["tokens"] = []
+            
         return d
 
 

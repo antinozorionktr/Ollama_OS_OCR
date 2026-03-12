@@ -10,9 +10,13 @@ from functools import lru_cache
 class Settings(BaseSettings):
     # ── Ollama ──
     ollama_base_url: str = "http://localhost:11434"
-    ocr_model: str = "ministral-3:14b"
+    ocr_model: str = "llama3.2-vision:11b"
 
     ollama_timeout: int = 300
+
+    # ── Surya OCR ──
+    surya_device: str = "auto"       # auto | cuda | cpu | mps
+    surya_offline: bool = False      # True = HF_HUB_OFFLINE=1 (after first download)
 
     # ── Data folders ──
     document_dir: str = "/data/Documents"

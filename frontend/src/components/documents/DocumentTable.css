@@ -1,0 +1,266 @@
+.document-table-container {
+    background: white;
+    border-radius: 0.75rem;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+    margin: 1.5rem;
+    overflow: hidden;
+    border: 1px solid rgba(194, 178, 128, 0.2);
+}
+
+.document-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.document-table th {
+    text-align: left;
+    padding: 1.5rem 1.5rem 1rem 1.5rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: rgba(47, 53, 59, 0.6);
+    /* slate-army/60 */
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid rgba(194, 178, 128, 0.2);
+}
+
+.document-table td {
+    padding: 1.25rem 1.5rem;
+    border-bottom: 1px solid rgba(194, 178, 128, 0.1);
+    vertical-align: middle;
+}
+
+.document-table tr:hover td {
+    background-color: rgba(194, 178, 128, 0.04);
+}
+
+.doc-row {
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.doc-name-cell {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.file-icon-wrapper {
+    color: var(--text-slate-army);
+    opacity: 0.6;
+}
+
+.doc-name {
+    font-weight: 700;
+    color: var(--text-slate-army);
+    font-size: 0.875rem;
+}
+
+.doc-pages,
+.doc-date {
+    color: rgba(47, 53, 59, 0.8);
+    font-size: 0.875rem;
+}
+
+/* Status Badges — now use inline Lucide SVG icons */
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.3rem 0.65rem;
+    border-radius: 9999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+/* removed .dot — badges now use Lucide icons */
+
+.status-badge.processing {
+    background-color: rgba(245, 158, 11, 0.1);
+    color: #d97706;
+    border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
+.status-badge.processing .dot {
+    background-color: #d97706;
+}
+
+.status-badge.review {
+    background-color: rgba(59, 130, 246, 0.1);
+    color: #2563eb;
+    border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+.status-badge.review .dot {
+    background-color: #2563eb;
+}
+
+.status-badge.approved {
+    background-color: rgba(16, 185, 129, 0.1);
+    color: #059669;
+    border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.status-badge.flagged {
+    background-color: rgba(239, 68, 68, 0.1);
+    color: #dc2626;
+    border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+/* Tag Elements */
+.tags-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    align-items: flex-start;
+}
+
+.element-tag {
+    background-color: #f1f5f9;
+    color: #64748b;
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.element-tag.analyzing-text {
+    background: none;
+    color: #94a3b8;
+    font-style: italic;
+    font-weight: 500;
+    text-transform: none;
+    padding: 0;
+}
+
+.element-tag.alert-tag {
+    background-color: transparent;
+    color: #dc2626;
+    font-weight: 800;
+    padding: 0;
+}
+
+/* Actions — icon buttons */
+.doc-actions {
+    white-space: nowrap;
+}
+
+.doc-actions .action-buttons {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.4rem;
+}
+
+.action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: transparent;
+    cursor: pointer;
+    transition: all 0.15s;
+    color: #94a3b8;
+}
+
+.action-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.view-btn:hover {
+    color: #3b82f6;
+    background: #eff6ff;
+    border-color: #bfdbfe;
+}
+
+.download-btn:hover {
+    color: #059669;
+    background: #d1fae5;
+    border-color: #6ee7b7;
+}
+
+.delete-btn:hover {
+    color: #dc2626;
+    background: #fee2e2;
+    border-color: #fca5a5;
+}
+
+.spin-icon {
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Empty / Loading table rows */
+.table-loading,
+.table-empty {
+    text-align: center;
+    padding: 3rem 1.5rem;
+    color: #94a3b8;
+    font-size: 0.875rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+}
+
+/* Pagination Footer */
+.table-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1.25rem 1.5rem;
+    border-top: 1px solid rgba(194, 178, 128, 0.2);
+    background-color: #f8fafc;
+}
+
+.record-count {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: #64748b;
+    letter-spacing: 0.05em;
+}
+
+.pagination {
+    display: flex;
+    gap: 0.25rem;
+}
+
+.page-btn {
+    width: 2rem;
+    height: 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.25rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #64748b;
+    cursor: pointer;
+}
+
+.page-btn.active {
+    background-color: var(--color-primary);
+    color: white;
+    border-color: var(--color-primary);
+}
+
+.page-btn:hover:not(.active) {
+    background-color: #f1f5f9;
+}

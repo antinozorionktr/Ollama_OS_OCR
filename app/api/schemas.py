@@ -61,6 +61,8 @@ class OCRResultResponse(BaseModel):
     error: Optional[str] = None
     processed_at: str
     batch_id: Optional[str] = None
+    tokens: list = []
+    markdown: Optional[str] = None
 
 
 class ResultsListResponse(BaseModel):
@@ -162,3 +164,44 @@ class ConfigResponse(BaseModel):
     ollama_base_url: str
     ocr_model: str
     document_dir: str
+
+
+# ─── Structured Extraction Pipeline ───
+
+class OCRToken(BaseModel):
+    text: str
+    bbox: list[float]   # [x1, y1, x2, y2]
+    page: int = 1
+
+
+class FieldValue(BaseModel):
+    value: Optional[Any] = None
+    bbox: Optional[list[float]] = None
+    page: int = 1
+
+
+class LineItemField(BaseModel):
+    description: FieldValue = FieldValue()
+    qty: FieldValue = FieldValue()
+    unit_price: FieldValue = FieldValue()
+    total: FieldValue = FieldValue()
+
+
+class ExtractedDocument(BaseModel):
+    document_type: str
+    fields: dict[str, FieldValue] = {}
+    line_items: list[LineItemField] = []
+    raw_tokens: list[OCRToken] = []
+    pages: int = 1
+
+
+class StructuredExtractionResponse(BaseModel):
+    result_id: int
+    file_name: str
+    extraction: ExtractedDocument
+    processing_time_seconds: float
+    error: Optional[str] = None
+
+
+class ApproveRequest(BaseModel):
+    fields: Optional[dict] = None   # optional overrides from UI edits

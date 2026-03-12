@@ -9,8 +9,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, UploadFile, File, Query, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, UploadFile, File, Form, Query, HTTPException, BackgroundTasks
+from fastapi.responses import FileResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from app.core.config import get_settings
@@ -20,9 +20,15 @@ from app.api.schemas import (
     ProcessFileRequest, ProcessResponse,
     BatchStartRequest, BatchResponse, BatchStatsResponse, BatchListResponse,
     DocxGenerateRequest, DocxResponse, ConfigResponse, DocType,
+    StructuredExtractionResponse, ExtractedDocument, FieldValue,
+    LineItemField, OCRToken, ApproveRequest,
 )
+from app.services.ocr_pipeline import OCRPipeline
 from app.utils.store import get_store
 from app.utils.ollama_client import OllamaOCRClient
+from app.utils.surya_client import SuryaOCRClient
+from app.utils.markdown_preparer import prepare_markdown
+from app.api import schemas
 from app.utils.extractors import StructuredExtractor
 from app.utils.text_cleaner import clean_ocr_text
 from app.utils.docx_generator import generate_docx_for_result
@@ -33,6 +39,21 @@ from app.services.batch_service import (
 
 logger = setup_logger("docvision.api")
 router = APIRouter()
+
+
+def _make_surya_client():
+    """Build a SuryaOCRClient from current settings. Returns None if not importable."""
+    try:
+        settings = get_settings()
+        client = SuryaOCRClient(
+            device=settings.surya_device,
+            offline=settings.surya_offline,
+        )
+        if client.is_available():
+            return client
+    except Exception as e:
+        logger.warning(f"Could not initialise Surya client: {e}")
+    return None
 
 
 # ═══════════════════════════════════════════════
@@ -526,3 +547,106 @@ async def clear_logs():
     """Clear the in-memory log buffer."""
     clear_log_buffer()
     return {"cleared": True}
+
+
+# ═══════════════════════════════════════════════
+# STRUCTURED EXTRACTION PIPELINE
+# ═══════════════════════════════════════════════
+
+@router.post(
+    "/results/{result_id}/extract-structured",
+    tags=["Structured Extraction"],
+    summary="Run 7-step structured extraction pipeline on a stored result (Background)",
+)
+async def extract_structured(
+    result_id: int,
+    background_tasks: BackgroundTasks,
+):
+    """Trigger the 7-step universal OCR pipeline in the background."""
+    store = get_store()
+    result = store.get_result(result_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Result not found")
+
+    file_path = result.get("file_path")
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Source file not found")
+
+    # Queue the task
+    background_tasks.add_task(_run_extraction_task, result_id, file_path)
+
+    return {
+        "result_id": result_id,
+        "status": "processing",
+        "message": "Extraction started in background."
+    }
+
+
+async def _run_extraction_task(result_id: int, file_path: str):
+    """Background task function to run the pipeline and update DB."""
+    store = get_store()
+    settings = get_settings()
+    client = OllamaOCRClient(
+        base_url=settings.ollama_base_url,
+        ocr_model=settings.ocr_model,
+        timeout=settings.ollama_timeout,
+    )
+    surya_client = _make_surya_client()
+    pipeline = OCRPipeline(client, surya_client=surya_client)
+
+    try:
+        # Run in threadpool to avoid blocking event loop
+        extraction_result = await run_in_threadpool(
+            pipeline.run,
+            file_path=file_path,
+        )
+        
+        # Extract fields and tokens
+        fields = extraction_result.get("fields", {})
+        tokens = extraction_result.get("raw_tokens", [])
+        
+        # Update DB
+        store.update_result_structured(result_id, fields, tokens)
+        logger.info(f"Background extraction complete for result {result_id}")
+        
+    except Exception as e:
+        logger.error(f"Background pipeline error for result {result_id}: {e}")
+        store.update_result_structured(result_id, {}, error=str(e))
+
+
+@router.post(
+    "/results/{result_id}/approve",
+    tags=["Structured Extraction"],
+    summary="Approve or update extracted fields for a result",
+)
+async def approve_result(
+    result_id: int,
+    req: ApproveRequest,
+):
+    """Mark a result as approved, optionally saving field overrides."""
+    store = get_store()
+    result = store.get_result(result_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Result not found")
+
+    try:
+        with store._cursor() as cur:
+            import json
+            # Merge UI field overrides on top of existing structured_data
+            existing = result.get("structured_data") or {}
+            if isinstance(existing, str):
+                try:
+                    existing = json.loads(existing)
+                except Exception:
+                    existing = {}
+            if req.fields:
+                existing.update(req.fields)
+            cur.execute(
+                "UPDATE results SET structured_data = ?, formatted_text = 'approved' WHERE id = ?",
+                (json.dumps(existing), result_id),
+            )
+    except Exception as e:
+        logger.error(f"Approve error for result {result_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {"approved": True, "result_id": result_id}

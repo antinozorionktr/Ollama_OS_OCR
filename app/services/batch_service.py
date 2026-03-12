@@ -15,6 +15,7 @@ from typing import Optional
 
 from app.core.config import get_settings
 from app.utils.ollama_client import OllamaOCRClient
+from app.utils.surya_client import SuryaOCRClient
 from app.utils.extractors import StructuredExtractor
 from app.utils.store import get_store
 from app.utils.time_estimator import TimeEstimator
@@ -181,6 +182,17 @@ def _run_batch_thread(
         ocr_model=settings.ocr_model,
         timeout=settings.ollama_timeout,
     )
+    # Initialise Surya for real bboxes (gracefully skipped if not installed)
+    try:
+        _surya = SuryaOCRClient(
+            device=settings.surya_device,
+            offline=settings.surya_offline,
+        )
+        if not _surya.is_available():
+            _surya = None
+    except Exception:
+        _surya = None
+
     extractor = StructuredExtractor(client)
     estimator = TimeEstimator()
     estimator.start_batch(len(files))

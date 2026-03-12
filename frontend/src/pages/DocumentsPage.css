@@ -1,0 +1,19 @@
+.documents-page {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    background-color: #f8fafc;
+    /* grid-like background from mockup */
+    background-image: linear-gradient(rgba(194, 178, 128, .05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(194, 178, 128, .05) 1px, transparent 1px);
+    background-size: 20px 20px;
+}
+
+.documents-content-scroll {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}

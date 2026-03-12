@@ -1,0 +1,137 @@
+.viewer-page {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: #f8fafc;
+    overflow: hidden;
+}
+
+/* ── Top Bar ── */
+.viewer-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.6rem 1.25rem;
+    background: white;
+    border-bottom: 1px solid #e2e8f0;
+    flex-shrink: 0;
+    gap: 1rem;
+    z-index: 10;
+}
+
+.back-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.75rem;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #475569;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+}
+
+.back-btn:hover {
+    background: #e2e8f0;
+}
+
+.topbar-center {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+}
+
+.doc-name {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: #1e293b;
+    max-width: 360px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.doc-name-loading {
+    color: #94a3b8;
+    font-size: 0.85rem;
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.4;
+    }
+}
+
+.topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.doctype-select {
+    padding: 0.35rem 0.6rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #475569;
+    background: white;
+    cursor: pointer;
+}
+
+.overlay-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.75rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 20px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition: all 0.15s;
+    color: #64748b;
+    background: white;
+}
+
+.overlay-toggle.active {
+    background: #fef3c7;
+    border-color: #fbbf24;
+    color: #92400e;
+}
+
+.overlay-toggle.markdown-active {
+    background: #e0f2fe;
+    border-color: #7dd3fc;
+    color: #0369a1;
+}
+
+/* ── Body ── */
+.viewer-body {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.viewer-left {
+    overflow: hidden;
+    border-right: 1px solid #e2e8f0;
+}
+
+.viewer-right {
+    overflow: hidden;
+}

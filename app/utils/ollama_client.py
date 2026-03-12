@@ -140,6 +140,130 @@ class OllamaOCRClient:
         )
         return self._call_ollama(prompt, [image_path], step="raw_text_extraction")
 
+    def extract_tokens_with_bbox(
+        self, image_path: str, page: int = 1, image_width: int = 1000, image_height: int = 1414
+    ) -> list[dict]:
+        """
+        Extract text tokens with bounding boxes from an image.
+        Returns list of {text, bbox:[x1,y1,x2,y2], page} dicts.
+        The model is asked to return spatial token information.
+        Falls back to line-level estimation if model doesn't support native bbox.
+        """
+        prompt = (
+            "You are a precise OCR token extraction system.\n\n"
+            "Analyze the document image and return ALL visible text as a JSON array.\n\n"
+            "For each piece of text, estimate its bounding box position on the image.\n"
+            f"The image is {image_width}x{image_height} pixels.\n\n"
+            "### Rules:\n"
+            "1. Break text into meaningful tokens: words, numbers, labels, values.\n"
+            "2. For each token estimate [x1, y1, x2, y2] pixel coordinates.\n"
+            "   - x1,y1 = top-left corner of the token\n"
+            "   - x2,y2 = bottom-right corner of the token\n"
+            "3. Sort tokens roughly by reading order (top-to-bottom, left-to-right).\n"
+            "4. Include ALL text — headers, body, tables, footers.\n\n"
+            "Return ONLY a valid JSON array. No explanations. No markdown.\n\n"
+            "Example output:\n"
+            '[\n'
+            '  {"text": "INVOICE", "bbox": [300, 50, 500, 80], "page": 1},\n'
+            '  {"text": "INV-2023-001", "bbox": [400, 95, 550, 120], "page": 1}\n'
+            ']'
+        )
+        raw = self._call_ollama(prompt, [image_path], step="token_extraction")
+
+        # Parse JSON response
+        text = raw.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            lines = lines[1:] if lines[0].startswith("```") else lines
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+
+        try:
+            tokens = json.loads(text)
+            return self._validate_tokens(tokens, page)
+        except json.JSONDecodeError:
+            # Tier 2: Recover partial array by truncating at last complete `}`
+            recovered = self._recover_partial_token_array(text)
+            if recovered is not None:
+                logger.info(
+                    f"Recovered {len(recovered)} tokens from partial JSON response.",
+                    extra={"step": "token_extraction"},
+                )
+                return self._validate_tokens(recovered, page)
+            # Tier 3: Raw text fallback
+            logger.warning(
+                "Token bbox parse failed; falling back to raw text synthesis.",
+                extra={"step": "token_extraction"},
+            )
+            raw_text = self.extract_raw_text(image_path)
+            return self._synthesize_tokens_from_text(raw_text, page, image_width, image_height)
+        except Exception as e:
+            logger.warning(f"Token extraction unexpected error: {e}. Falling back.",
+                           extra={"step": "token_extraction"})
+            raw_text = self.extract_raw_text(image_path)
+            return self._synthesize_tokens_from_text(raw_text, page, image_width, image_height)
+
+    def _validate_tokens(self, tokens, page: int) -> list[dict]:
+        """Validate and normalise a parsed token list."""
+        result = []
+        for t in tokens:
+            if isinstance(t, dict) and "text" in t and "bbox" in t:
+                try:
+                    result.append({
+                        "text": str(t["text"]).strip(),
+                        "bbox": [float(v) for v in t["bbox"][:4]],
+                        "page": int(t.get("page", page))
+                    })
+                except (TypeError, ValueError):
+                    pass
+        return result
+
+    def _recover_partial_token_array(self, text: str):
+        """
+        Salvage valid tokens from a truncated JSON array.
+        Finds the last complete JSON object, closes the array, and re-parses.
+        """
+        last_brace = text.rfind('},')
+        if last_brace == -1:
+            last_brace = text.rfind('}')
+        if last_brace == -1:
+            return None
+
+        candidate = text[:last_brace + 1].strip()
+        if candidate.endswith(','):
+            candidate = candidate[:-1]
+        start = candidate.find('[')
+        if start == -1:
+            return None
+        candidate = candidate[start:] + ']'
+
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            return None
+
+
+    def _synthesize_tokens_from_text(self, text: str, page: int, w: int, h: int) -> list[dict]:
+        """Fallback: create approximate bbox tokens by distributing lines vertically."""
+        import re
+        tokens = []
+        lines = [l for l in text.split("\n") if l.strip()]
+        line_h = max(h // max(len(lines), 1), 16)
+        for idx, line in enumerate(lines):
+            words = re.split(r'\s+', line.strip())
+            line_y1 = idx * line_h
+            line_y2 = line_y1 + line_h
+            col_w = max(w // max(len(words), 1), 30)
+            for widx, word in enumerate(words):
+                if word:
+                    tokens.append({
+                        "text": word,
+                        "bbox": [widx * col_w, line_y1, (widx + 1) * col_w, line_y2],
+                        "page": page
+                    })
+        return tokens
+
     def extract_structured_data(self, image_path: str, doc_type: str) -> dict:
         """Extract structured key-value data from a document image."""
 

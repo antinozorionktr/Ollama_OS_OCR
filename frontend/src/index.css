@@ -1,90 +1,78 @@
-@import "tailwindcss";
-
-@theme {
-  --color-india-saffron: #FF9933;
-  --color-india-white: #FFFFFF;
-  --color-india-green: #138808;
-  --color-india-navy: #000080;
-
-  --background-image-tricolour-gradient: linear-gradient(to right, #FF9933 0%, #FFFFFF 30%, #FFFFFF 70%, #138808 100%);
-  --background-image-tricolour-vertical: linear-gradient(to bottom, #FF9933 0%, #FFFFFF 30%, #FFFFFF 70%, #138808 100%);
-
-  --animate-fade-in: fadeIn 0.5s ease-out forwards;
-  --animate-slide-up: slideUp 0.5s ease-out forwards;
-
-  @keyframes fadeIn {
-    from {
-      opacity: 0;
-    }
-
-    to {
-      opacity: 1;
-    }
-  }
-
-  @keyframes slideUp {
-    from {
-      transform: translateY(20px);
-      opacity: 0;
-    }
-
-    to {
-      transform: translateY(0);
-      opacity: 1;
-    }
-  }
-}
+@import url('https://fonts.googleapis.com/css2?family=Public+Sans:wght@300;400;500;600;700;800;900&display=swap');
 
 :root {
-  --saffron: #FF9933;
-  --white: #FFFFFF;
-  --green: #138808;
-  --navy: #000080;
-  --light-gray: #f8f9fa;
-  --text-primary: #1a1a1a;
-  --text-secondary: #4a4a4a;
+  /* Colors from new design */
+  --color-primary: #4B5320;
+  /* Olive Green */
+  --color-secondary: #C2B280;
+  /* Desert Khaki */
+  --bg-light: #f8f6f2;
+  /* Very light khaki / Off-white */
+  --bg-dark: #221610;
+  --text-slate-army: #2F353B;
+
+  --font-display: 'Public Sans', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
 }
 
 body {
-  margin: 0;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
-  background-color: var(--light-gray);
-  color: var(--text-primary);
+  font-family: var(--font-display);
+  background-color: var(--bg-light);
+  color: #0f172a;
+  /* Custom text slate 900 */
+  min-height: 100vh;
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
 }
 
-@utility btn-primary {
-  @apply px-6 py-2 bg-india-saffron text-white rounded-lg font-semibold hover:bg-india-saffron/90 transition-all duration-300 shadow-md transform hover:-translate-y-0.5 active:translate-y-0;
+.app-container {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
 }
 
-@utility btn-secondary {
-  @apply px-6 py-2 bg-india-green text-white rounded-lg font-semibold hover:bg-india-green/90 transition-all duration-300 shadow-md transform hover:-translate-y-0.5 active:translate-y-0;
+/* Utilities */
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
 }
 
-@utility card-glass {
-  @apply bg-white/70 backdrop-blur-md border border-white/30 rounded-2xl shadow-xl;
+.camouflage-pattern {
+  background-image:
+    radial-gradient(#4B5320 10%, transparent 11%),
+    radial-gradient(#C2B280 10%, transparent 11%),
+    radial-gradient(#8B7D4B 10%, transparent 11%);
+  background-size: 60px 60px;
+  background-position: 0 0, 30px 30px, 15px 15px;
+  opacity: 0.03;
 }
 
-@utility tricolour-border {
-  border-top: 4px solid var(--saffron);
-  border-bottom: 4px solid var(--green);
+.stencil-border {
+  position: relative;
 }
 
-/* Custom Scrollbar */
-::-webkit-scrollbar {
-  width: 8px;
+.stencil-border::before,
+.stencil-border::after {
+  content: '';
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border: 2px solid #4B5320;
 }
 
-::-webkit-scrollbar-track {
-  background: #f1f1f1;
+.stencil-top-left::before {
+  top: -2px;
+  left: -2px;
+  border-right: 0;
+  border-bottom: 0;
 }
 
-::-webkit-scrollbar-thumb {
-  background: var(--saffron);
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #e68a00;
+.stencil-top-right::after {
+  top: -2px;
+  right: -2px;
+  border-left: 0;
+  border-bottom: 0;
 }

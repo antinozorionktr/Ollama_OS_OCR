@@ -1,0 +1,12 @@
+.main-wrapper {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    background-color: var(--bg-light);
+}
+
+.content-area {
+    flex: 1;
+    /* Removed RightSidebar fixed position constraint as the new layout builds a grid within the page itself */
+}
