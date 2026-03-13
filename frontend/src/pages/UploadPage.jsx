@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
     LayoutGrid, Table, CheckSquare, Edit3, PenTool, LayoutTemplate,
     CloudUpload, Paperclip, List, FileText, X, ShieldCheck, Lock, Info, CheckCircle
@@ -8,6 +9,7 @@ import './UploadPage.css';
 const UploadPage = () => {
     const [uploads, setUploads] = useState([]);
     const fileInputRef = useRef(null);
+    const navigate = useNavigate();
 
     const capabilities = [
         { icon: LayoutGrid, title: 'Complex Forms', desc: 'Multi-column military application processing.' },
@@ -61,7 +63,7 @@ const UploadPage = () => {
                 }));
             }, 1000);
 
-            fetch('/api/process/upload?extract_raw=true&extract_structured=true', {
+            fetch('/api/upload', {
                 method: 'POST',
                 body: formData
             })
@@ -69,12 +71,15 @@ const UploadPage = () => {
                 .then(data => {
                     clearInterval(progressInterval);
                     setUploads(prev => prev.map(u =>
-                        u.id === fileId ? { ...u, progress: 100, status: 'complete' } : u
+                        u.id === fileId ? { ...u, progress: 100, status: 'complete', documentId: data.document_id } : u
                     ));
 
-                    setTimeout(() => {
-                        setUploads(prev => prev.filter(u => u.id !== fileId));
-                    }, 8000);
+                    // Navigate to document viewer after brief delay
+                    if (data.document_id) {
+                        setTimeout(() => {
+                            navigate(`/documents/${data.document_id}`);
+                        }, 2000);
+                    }
                 })
                 .catch(err => {
                     clearInterval(progressInterval);

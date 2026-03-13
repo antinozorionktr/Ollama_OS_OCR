@@ -11,6 +11,14 @@
   --bg-dark: #221610;
   --text-slate-army: #2F353B;
 
+  /* Theme tokens */
+  --color-bg: var(--bg-light);
+  --color-surface: #ffffff;
+  --color-surface-hover: #f1f5f9;
+  --color-border: rgba(75, 83, 32, 0.15);
+  --color-text: #0f172a;
+  --color-text-secondary: #475569;
+
   --font-display: 'Public Sans', sans-serif;
 }
 

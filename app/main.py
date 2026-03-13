@@ -19,10 +19,11 @@ settings = get_settings()
 app = FastAPI(
     title="DocVision OCR API",
     description=(
-        "REST API for universal document OCR and data extraction using Vision models via Ollama. "
-        "Supports complex forms, tables, checkboxes, and handwriting with structured JSON extraction."
+        "REST API for document OCR using llama3.2-vision:11b for extraction "
+        "and mistral:7b for text cleanup and layout reconstruction. "
+        "Semantic pipeline — no bounding boxes."
     ),
-    version="3.0.0",
+    version="4.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -46,9 +47,10 @@ app.include_router(ws_router)
 async def startup():
     logger.info("DocVision OCR API starting up")
     store = get_store()
-    store.interrupt_active_batches()
-    logger.info(f"Ollama: {settings.ollama_base_url} | Model: {settings.ocr_model}")
-    logger.info(f"Vault: {settings.document_dir}")
+    logger.info(f"Ollama: {settings.ollama_base_url}")
+    logger.info(f"Vision model: {settings.vision_model}")
+    logger.info(f"Cleanup model: {settings.cleanup_model}")
+    logger.info(f"Document dir: {settings.document_dir}")
     logger.info("API ready at /docs")
 
 
@@ -56,7 +58,7 @@ async def startup():
 async def root():
     return {
         "service": "DocVision OCR API",
-        "version": "3.0.0",
+        "version": "4.0.0",
         "docs": "/docs",
         "health": "/api/health",
     }

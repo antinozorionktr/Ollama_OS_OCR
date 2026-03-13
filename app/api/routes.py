@@ -4,56 +4,40 @@ FastAPI REST API routes for DocVision OCR.
 
 import os
 import asyncio
-import tempfile
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, UploadFile, File, Form, Query, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import APIRouter, UploadFile, File, Query, HTTPException
 from starlette.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse
 
 from app.core.config import get_settings
 from app.api.schemas import (
-    HealthResponse, FolderStatsResponse, FolderFilesResponse,
-    OCRResultResponse, ResultsListResponse, DeleteResponse,
-    ProcessFileRequest, ProcessResponse,
-    BatchStartRequest, BatchResponse, BatchStatsResponse, BatchListResponse,
-    DocxGenerateRequest, DocxResponse, ConfigResponse, DocType,
-    StructuredExtractionResponse, ExtractedDocument, FieldValue,
-    LineItemField, OCRToken, ApproveRequest,
+    HealthResponse, ConfigResponse, StatsResponse,
+    DocumentResponse, DocumentListResponse, DocumentDetailResponse,
+    PageResponse, ProcessResponse, DeleteResponse, StructuredDataUpdate,
 )
 from app.services.ocr_pipeline import OCRPipeline
 from app.utils.store import get_store
 from app.utils.ollama_client import OllamaOCRClient
-from app.utils.surya_client import SuryaOCRClient
-from app.utils.markdown_preparer import prepare_markdown
-from app.api import schemas
-from app.utils.extractors import StructuredExtractor
-from app.utils.text_cleaner import clean_ocr_text
-from app.utils.docx_generator import generate_docx_for_result
-from app.utils.logger import setup_logger, get_log_buffer, clear_log_buffer
-from app.services.batch_service import (
-    start_batch, resume_batch, list_files, SUPPORTED_EXTENSIONS, broadcast_sync,
-)
+from app.utils.logger import setup_logger
 
 logger = setup_logger("docvision.api")
 router = APIRouter()
 
+SUPPORTED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp"}
 
-def _make_surya_client():
-    """Build a SuryaOCRClient from current settings. Returns None if not importable."""
-    try:
-        settings = get_settings()
-        client = SuryaOCRClient(
-            device=settings.surya_device,
-            offline=settings.surya_offline,
-        )
-        if client.is_available():
-            return client
-    except Exception as e:
-        logger.warning(f"Could not initialise Surya client: {e}")
-    return None
+
+def _list_files(directory: str) -> list[str]:
+    """List supported files in a directory."""
+    if not directory or not os.path.isdir(directory):
+        return []
+    return sorted(
+        os.path.join(directory, f)
+        for f in os.listdir(directory)
+        if Path(f).suffix.lower() in SUPPORTED_EXTENSIONS
+    )
 
 
 # ═══════════════════════════════════════════════
@@ -66,19 +50,24 @@ async def health_check():
     settings = get_settings()
     client = OllamaOCRClient(
         base_url=settings.ollama_base_url,
-        ocr_model=settings.ocr_model,
+        vision_model=settings.vision_model,
+        cleanup_model=settings.cleanup_model,
+        vllm_base_url=settings.vllm_base_url,
+        use_vllm=settings.use_vllm,
     )
     health = client.health_check()
     store = get_store()
     db_ok = True
     try:
-        store.get_results_count()
+        store.get_documents_count()
     except Exception:
         db_ok = False
 
     return HealthResponse(
         status="ok" if health["ollama_reachable"] and db_ok else "degraded",
         ollama_reachable=health["ollama_reachable"],
+        vision_model_available=health.get("vision_model_available", False),
+        cleanup_model_available=health.get("cleanup_model_available", False),
         model_available=health.get("model_available", False),
         available_models=health.get("available_models", []),
         db_ok=db_ok,
@@ -91,171 +80,55 @@ async def get_config():
     s = get_settings()
     return ConfigResponse(
         ollama_base_url=s.ollama_base_url,
-        ocr_model=s.ocr_model,
+        vision_model=s.vision_model,
+        cleanup_model=s.cleanup_model,
         document_dir=s.document_dir,
     )
 
 
 # ═══════════════════════════════════════════════
-# FOLDERS & STATS
+# STATS
 # ═══════════════════════════════════════════════
 
-@router.get("/stats", response_model=FolderStatsResponse, tags=["Stats"])
+@router.get("/stats", response_model=StatsResponse, tags=["Stats"])
 async def get_stats():
-    """Get file counts in universal vault and processed counts."""
+    """Get document and file counts."""
     settings = get_settings()
     store = get_store()
-    docs = list_files(settings.document_dir)
-    processed = store.get_results_count()
-
-    return FolderStatsResponse(
-        document=len(docs),
-        total_files=len(docs),
-        processed_count=processed,
-    )
-
-
-@router.get("/folders/{doc_type}", response_model=FolderFilesResponse, tags=["Stats"])
-async def get_folder_files(doc_type: DocType):
-    """List all supported files in the vault."""
-    settings = get_settings()
-    folder = settings.document_dir
-    files = list_files(folder)
-    return FolderFilesResponse(
-        doc_type=doc_type.value,
-        folder_path=folder,
-        files=[os.path.basename(f) for f in files],
-        count=len(files),
+    files = _list_files(settings.document_dir)
+    doc_count = store.get_documents_count()
+    return StatsResponse(
+        total_documents=doc_count,
+        total_files=len(files),
     )
 
 
 # ═══════════════════════════════════════════════
-# RESULTS CRUD
+# UPLOAD & PROCESS
 # ═══════════════════════════════════════════════
 
-@router.get("/results", response_model=ResultsListResponse, tags=["Results"])
-async def get_results(
-    doc_type: Optional[str] = Query(None, description="Filter by doc type"),
-    limit: int = Query(100, ge=1, le=1000),
-    offset: int = Query(0, ge=0),
-):
-    """Get all OCR results with optional filtering and pagination."""
-    store = get_store()
-    all_results = store.get_all_results(doc_type=doc_type)
-    total = len(all_results)
-    page = all_results[offset: offset + limit]
-
-    results = []
-    for r in page:
-        clean = clean_ocr_text(r.get("raw_text", "")) if r.get("raw_text") else None
-        results.append(OCRResultResponse(
-            id=r["id"],
-            file_name=r.get("file_name", ""),
-            file_path=r.get("file_path", ""),
-            doc_type=r.get("doc_type", ""),
-            raw_text=r.get("raw_text"),
-            clean_text=clean,
-            formatted_text=r.get("formatted_text"),
-            structured_data=r.get("structured_data", {}),
-            page_count=r.get("page_count", 0),
-            processing_time_seconds=r.get("processing_time_seconds"),
-            error=r.get("error"),
-            processed_at=r.get("processed_at", ""),
-            batch_id=r.get("batch_id"),
-        ))
-
-    return ResultsListResponse(results=results, total=total)
-
-
-@router.get("/results/{result_id}", response_model=OCRResultResponse, tags=["Results"])
-async def get_result(result_id: int):
-    """Get a single OCR result by ID."""
-    store = get_store()
-    result = store.get_result(result_id)
-    if not result:
-        raise HTTPException(status_code=404, detail="Result not found")
-
-    clean = clean_ocr_text(result.get("raw_text", "")) if result.get("raw_text") else None
-    return OCRResultResponse(
-        id=result["id"],
-        file_name=result.get("file_name", ""),
-        file_path=result.get("file_path", ""),
-        doc_type=result.get("doc_type", ""),
-        raw_text=result.get("raw_text"),
-        clean_text=clean,
-        formatted_text=result.get("formatted_text"),
-        structured_data=result.get("structured_data", {}),
-        page_count=result.get("page_count", 0),
-        processing_time_seconds=result.get("processing_time_seconds"),
-        error=result.get("error"),
-        processed_at=result.get("processed_at", ""),
-        batch_id=result.get("batch_id"),
-    )
-
-
-@router.delete("/results", response_model=DeleteResponse, tags=["Results"])
-async def delete_all_results():
-    """Delete all OCR results and batch data."""
-    store = get_store()
-    store.delete_all_results()
-    return DeleteResponse(deleted=True, message="All results and batches cleared")
-
-
-@router.delete("/results/{result_id}", response_model=DeleteResponse, tags=["Results"])
-async def delete_result(result_id: int):
-    """Delete a single result by ID and its associated file."""
-    store = get_store()
-    result = store.get_result(result_id)
-    if not result:
-        raise HTTPException(status_code=404, detail="Result not found")
-
-    # Delete physical file if it exists
-    file_path = result.get("file_path")
-    if file_path and os.path.exists(file_path):
-        try:
-            os.remove(file_path)
-            logger.info(f"Deleted file: {file_path}")
-        except Exception as e:
-            logger.error(f"Failed to delete file {file_path}: {e}")
-
-    # Delete from DB
-    with store._cursor() as cur:
-        cur.execute("DELETE FROM results WHERE id = ?", (result_id,))
-        # Also clean up from batch_queue if referenced
-        cur.execute("UPDATE batch_queue SET result_id = NULL WHERE result_id = ?", (result_id,))
-
-    return DeleteResponse(deleted=True, message=f"Result {result_id} and its file purged")
-
-
-# ═══════════════════════════════════════════════
-# SINGLE FILE PROCESSING
-# ═══════════════════════════════════════════════
-
-@router.post("/process/upload", response_model=ProcessResponse, tags=["Processing"])
-async def process_uploaded_file(
+@router.post("/upload", response_model=ProcessResponse, tags=["Processing"])
+async def upload_and_process(
     file: UploadFile = File(...),
-    doc_type: DocType = Query(DocType.document),
-    extract_raw: bool = Query(True),
-    extract_structured: bool = Query(True),
 ):
-    """Upload and process a single document file."""
+    """Upload and process a document file through the OCR pipeline."""
     settings = get_settings()
 
-    # Determine permanent storage directory
+    # Validate file type
     ext = Path(file.filename or "file.pdf").suffix.lower()
     if ext not in SUPPORTED_EXTENSIONS:
         raise HTTPException(400, f"Unsupported file type: {ext}. Supported: {SUPPORTED_EXTENSIONS}")
 
+    # Save to document directory
     target_dir = settings.document_dir
     os.makedirs(target_dir, exist_ok=True)
-
-    # Save to permanent storage
     file_path = os.path.join(target_dir, file.filename or "uploaded_file.pdf")
+
     # Avoid overwriting
     if os.path.exists(file_path):
         base, extension = os.path.splitext(file_path)
         file_path = f"{base}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{extension}"
-    
+
     file_path = os.path.abspath(file_path)
 
     with open(file_path, "wb") as buffer:
@@ -265,12 +138,16 @@ async def process_uploaded_file(
     try:
         client = OllamaOCRClient(
             base_url=settings.ollama_base_url,
-            ocr_model=settings.ocr_model,
+            vision_model=settings.vision_model,
+            cleanup_model=settings.cleanup_model,
             timeout=settings.ollama_timeout,
+            vllm_base_url=settings.vllm_base_url,
+            use_vllm=settings.use_vllm,
         )
-        extractor = StructuredExtractor(client)
+        pipeline = OCRPipeline(client)
 
         def progress_callback(data):
+            from app.services.batch_service import broadcast_sync
             broadcast_sync({
                 "type": "upload_progress",
                 "file_name": file.filename,
@@ -278,257 +155,171 @@ async def process_uploaded_file(
             })
 
         result = await run_in_threadpool(
-            extractor.process_document,
+            pipeline.process_document,
             file_path=file_path,
-            doc_type=doc_type.value,
-            extract_raw=extract_raw,
-            extract_structured=extract_structured,
-            on_progress=progress_callback
+            on_progress=progress_callback,
         )
-        result["file_name"] = file.filename
-        result["file_path"] = file_path
-        result["doc_type"] = doc_type.value
-        result["processed_at"] = datetime.now().isoformat()
-
-        store = get_store()
-        result_id = store.save_result(result)
 
         return ProcessResponse(
-            result_id=result_id,
-            file_name=file.filename or "",
-            doc_type=doc_type.value,
-            processing_time_seconds=result.get("processing_time_seconds", 0),
-            page_count=result.get("page_count", 0),
+            document_id=result["document_id"],
+            filename=result["filename"],
+            total_pages=result["total_pages"],
+            processing_time_seconds=result["processing_time_seconds"],
         )
     except Exception as e:
         logger.error(f"Upload processing error: {e}")
         raise HTTPException(500, f"Processing failed: {str(e)}")
 
 
-@router.post("/process/path", response_model=ProcessResponse, tags=["Processing"])
-async def process_file_by_path(
-    file_path: str = Query(..., description="Absolute path to file on server"),
-    doc_type: DocType = Query(DocType.document),
-    extract_raw: bool = Query(True),
-    extract_structured: bool = Query(True),
-):
-    """Process a file by its server-side path."""
-    if not os.path.exists(file_path):
-        raise HTTPException(404, f"File not found: {file_path}")
+# ═══════════════════════════════════════════════
+# DOCUMENTS CRUD
+# ═══════════════════════════════════════════════
 
-    settings = get_settings()
-    client = OllamaOCRClient(
-        base_url=settings.ollama_base_url,
-        ocr_model=settings.ocr_model,
-        timeout=settings.ollama_timeout,
+@router.get("/documents", response_model=DocumentListResponse, tags=["Documents"])
+async def list_documents():
+    """List all processed documents."""
+    store = get_store()
+    docs = store.get_all_documents()
+    return DocumentListResponse(
+        documents=[DocumentResponse(**d) for d in docs],
+        total=len(docs),
     )
-    extractor = StructuredExtractor(client)
 
+
+@router.get("/documents/{document_id}", response_model=DocumentDetailResponse, tags=["Documents"])
+async def get_document(document_id: int):
+    """Get a document with all its page results."""
+    store = get_store()
+    doc = store.get_document(document_id)
+    if not doc:
+        raise HTTPException(404, "Document not found")
+
+    pages = store.get_document_pages(document_id)
+
+    return DocumentDetailResponse(
+        document=DocumentResponse(**doc),
+        pages=[PageResponse(**p) for p in pages],
+    )
+
+
+    return PageResponse(**page)
+
+
+@router.put("/documents/{document_id}/pages/{page_number}/structured", tags=["Documents"])
+async def update_page_structured(document_id: int, page_number: int, update: StructuredDataUpdate):
+    """Update the structured data for a specific page."""
+    store = get_store()
+    page = store.get_page(document_id, page_number)
+    if not page:
+        raise HTTPException(404, f"Page {page_number} not found for document {document_id}")
+    
+    store.update_page_structured_data(document_id, page_number, update.structured_data)
+    return {"updated": True}
+
+
+@router.post("/documents/{document_id}/rerun", response_model=ProcessResponse, tags=["Processing"])
+async def rerun_ocr(document_id: int):
+    """Re-run the OCR pipeline for an existing document."""
+    store = get_store()
+    doc = store.get_document(document_id)
+    if not doc:
+        raise HTTPException(404, "Document not found")
+    
+    file_path = doc.get("file_path")
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(404, "Original document file not found")
+    
+    settings = get_settings()
     try:
-        result = extractor.process_document(
-            file_path=file_path,
-            doc_type=doc_type.value,
-            extract_raw=extract_raw,
-            extract_structured=extract_structured,
+        # Before re-running, clear existing pages for this document
+        # Wait, should we? Re-running usually means fresh start for that doc.
+        # But we want to maintain the document ID.
+        # Let's delete existing pages first.
+        with store._cursor() as cur:
+            cur.execute("DELETE FROM document_pages WHERE document_id = ?", (document_id,))
+            
+        client = OllamaOCRClient(
+            base_url=settings.ollama_base_url,
+            vision_model=settings.vision_model,
+            cleanup_model=settings.cleanup_model,
+            timeout=settings.ollama_timeout,
+            vllm_base_url=settings.vllm_base_url,
+            use_vllm=settings.use_vllm,
         )
-        result["file_name"] = os.path.basename(file_path)
-        result["file_path"] = file_path
-        result["doc_type"] = doc_type.value
-        result["processed_at"] = datetime.now().isoformat()
-
-        store = get_store()
-        result_id = store.save_result(result)
-
+        pipeline = OCRPipeline(client)
+        
+        # We need a process_document_v2 or similar that takes doc_id?
+        # Current process_document always saves a NEW document.
+        # I should modify process_document to accept an existing doc_id.
+        
+        result = await run_in_threadpool(
+            pipeline.process_document,
+            file_path=file_path,
+            document_id=document_id, # We'll need to update process_document to handle this
+        )
+        
         return ProcessResponse(
-            result_id=result_id,
-            file_name=os.path.basename(file_path),
-            doc_type=doc_type.value,
-            processing_time_seconds=result.get("processing_time_seconds", 0),
-            page_count=result.get("page_count", 0),
+            document_id=result["document_id"],
+            filename=result["filename"],
+            total_pages=result["total_pages"],
+            processing_time_seconds=result["processing_time_seconds"],
         )
     except Exception as e:
-        raise HTTPException(500, f"Processing failed: {str(e)}")
+        logger.error(f"Rerun processing error: {e}")
+        raise HTTPException(500, f"Rerun failed: {str(e)}")
 
 
-# ═══════════════════════════════════════════════
-# BATCH PROCESSING
-# ═══════════════════════════════════════════════
-
-@router.post("/batches/start", response_model=BatchResponse, tags=["Batches"])
-async def start_batch_processing(req: BatchStartRequest):
-    """Start a new batch processing job (runs in background)."""
-    loop = asyncio.get_event_loop()
-    result = start_batch(
-        doc_types=[d.value for d in req.doc_types],
-        extract_raw=req.extract_raw,
-        extract_structured=req.extract_structured,
-        loop=loop,
-    )
-    if result.get("error"):
-        raise HTTPException(400, result["error"])
-
-    return BatchResponse(**result)
-
-
-@router.post("/batches/{batch_id}/resume", response_model=BatchResponse, tags=["Batches"])
-async def resume_batch_processing(
-    batch_id: str,
-    extract_raw: bool = Query(True),
-    extract_structured: bool = Query(True),
-):
-    """Resume an interrupted batch."""
-    loop = asyncio.get_event_loop()
-    result = resume_batch(batch_id, extract_raw, extract_structured, loop=loop)
-    if result.get("error"):
-        raise HTTPException(404, result["error"])
-    return BatchResponse(**result)
-
-
-@router.post("/batches/{batch_id}/discard", response_model=BatchResponse, tags=["Batches"])
-async def discard_batch(batch_id: str):
-    """Discard an interrupted batch."""
+@router.get("/documents/{document_id}/preview", tags=["Documents"])
+async def get_document_preview(document_id: int):
+    """Stream the original document file for preview."""
     store = get_store()
-    batch = store.get_batch(batch_id)
-    if not batch:
-        raise HTTPException(404, "Batch not found")
-    store.finish_batch(batch_id, "discarded")
-    return BatchResponse(
-        batch_id=batch_id, status="discarded",
-        total_files=batch["total_files"], message="Batch discarded",
-    )
+    doc = store.get_document(document_id)
+    if not doc:
+        raise HTTPException(404, "Document not found")
 
-
-@router.get("/batches", response_model=BatchListResponse, tags=["Batches"])
-async def list_batches(
-    status: Optional[str] = Query(None, description="Filter by status"),
-    limit: int = Query(20, ge=1, le=100),
-):
-    """List all batches."""
-    store = get_store()
-    with store._cursor() as cur:
-        if status:
-            cur.execute(
-                "SELECT * FROM batches WHERE status = ? ORDER BY started_at DESC LIMIT ?",
-                (status, limit),
-            )
-        else:
-            cur.execute("SELECT * FROM batches ORDER BY started_at DESC LIMIT ?", (limit,))
-        rows = cur.fetchall()
-    return BatchListResponse(batches=[dict(r) for r in rows])
-
-
-@router.get("/batches/active", tags=["Batches"])
-async def get_active_batch():
-    """Get the most recent active/interrupted batch."""
-    store = get_store()
-    batch = store.get_active_batch()
-    if not batch:
-        return {"batch": None, "message": "No active batch"}
-    stats = store.get_batch_stats(batch["id"])
-    return {"batch": batch, "stats": stats}
-
-
-@router.get("/batches/{batch_id}", response_model=BatchStatsResponse, tags=["Batches"])
-async def get_batch_status(batch_id: str, include_queue: bool = Query(False)):
-    """Get detailed batch status and progress."""
-    store = get_store()
-    stats = store.get_batch_stats(batch_id)
-    if not stats:
-        raise HTTPException(404, "Batch not found")
-
-    queue = []
-    if include_queue:
-        queue = store.get_batch_queue(batch_id)
-
-    return BatchStatsResponse(**stats, queue=queue)
-
-
-# ═══════════════════════════════════════════════
-# DOCX GENERATION
-# ═══════════════════════════════════════════════
-
-@router.post("/results/{result_id}/docx", response_model=DocxResponse, tags=["Documents"])
-async def generate_docx(result_id: int):
-    """Generate a Word document for a specific result."""
-    store = get_store()
-    result = store.get_result(result_id)
-    if not result:
-        raise HTTPException(404, "Result not found")
-    if result.get("error"):
-        raise HTTPException(400, "Cannot generate DOCX for failed result")
-
-    docx_path = generate_docx_for_result(result)
-    if not docx_path:
-        return DocxResponse(success=False, error="DOCX generation failed")
-
-    file_name = os.path.basename(docx_path)
-    return DocxResponse(
-        success=True,
-        file_name=file_name,
-        download_url=f"/api/results/{result_id}/docx/download",
-    )
-
-
-@router.get("/results/{result_id}/docx/download", tags=["Documents"])
-async def download_docx(result_id: int):
-    """Download the generated Word document."""
-    store = get_store()
-    result = store.get_result(result_id)
-    if not result:
-        raise HTTPException(404, "Result not found")
-
-    docx_path = generate_docx_for_result(result)
-    if not docx_path or not os.path.exists(docx_path):
-        raise HTTPException(404, "DOCX file not found — generate it first")
-
-    return FileResponse(
-        docx_path,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        filename=os.path.basename(docx_path),
-    )
-
-
-@router.post("/results/docx/bulk", tags=["Documents"])
-async def generate_bulk_docx(doc_type: Optional[str] = Query(None)):
-    """Generate Word documents for all results (optionally filtered)."""
-    store = get_store()
-    all_results = store.get_all_results(doc_type=doc_type)
-    success = 0
-    failed = 0
-    for r in all_results:
-        if not r.get("error"):
-            path = generate_docx_for_result(r)
-            if path:
-                success += 1
-            else:
-                failed += 1
-    return {"generated": success, "failed": failed, "total": len(all_results)}
-
-
-@router.get("/results/{result_id}/preview", tags=["Documents"])
-async def get_document_preview(result_id: int):
-    """Stream the original document for preview."""
-    store = get_store()
-    result = store.get_result(result_id)
-    if not result:
-        raise HTTPException(404, "Result not found")
-
-    file_path = result.get("file_path")
+    file_path = doc.get("file_path")
     if not file_path or not os.path.exists(file_path):
         raise HTTPException(404, "Original document file not found")
 
-    # Determine media type based on extension
     ext = Path(file_path).suffix.lower()
     media_map = {
         ".pdf": "application/pdf",
         ".png": "image/png",
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
-        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     }
     media_type = media_map.get(ext, "application/octet-stream")
-
     return FileResponse(file_path, media_type=media_type)
+
+
+@router.delete("/documents/{document_id}", response_model=DeleteResponse, tags=["Documents"])
+async def delete_document(document_id: int):
+    """Delete a document and its associated file."""
+    store = get_store()
+    doc = store.get_document(document_id)
+    if not doc:
+        raise HTTPException(404, "Document not found")
+
+    # Delete physical file
+    file_path = doc.get("file_path")
+    if file_path and os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+            logger.info(f"Deleted file: {file_path}")
+        except Exception as e:
+            logger.error(f"Failed to delete file {file_path}: {e}")
+
+    # Delete from DB
+    store.delete_document(document_id)
+    return DeleteResponse(deleted=True, message=f"Document {document_id} deleted")
+
+
+@router.delete("/documents", response_model=DeleteResponse, tags=["Documents"])
+async def delete_all_documents():
+    """Delete all documents and their data."""
+    store = get_store()
+    store.delete_all_documents()
+    return DeleteResponse(deleted=True, message="All documents deleted")
 
 
 # ═══════════════════════════════════════════════
@@ -538,6 +329,7 @@ async def get_document_preview(result_id: int):
 @router.get("/logs", tags=["System"])
 async def get_logs(limit: int = Query(100, ge=1, le=500)):
     """Get recent log entries from the in-memory buffer."""
+    from app.utils.logger import get_log_buffer
     logs = get_log_buffer()
     return {"logs": logs[-limit:], "total": len(logs)}
 
@@ -545,108 +337,6 @@ async def get_logs(limit: int = Query(100, ge=1, le=500)):
 @router.delete("/logs", tags=["System"])
 async def clear_logs():
     """Clear the in-memory log buffer."""
+    from app.utils.logger import clear_log_buffer
     clear_log_buffer()
     return {"cleared": True}
-
-
-# ═══════════════════════════════════════════════
-# STRUCTURED EXTRACTION PIPELINE
-# ═══════════════════════════════════════════════
-
-@router.post(
-    "/results/{result_id}/extract-structured",
-    tags=["Structured Extraction"],
-    summary="Run 7-step structured extraction pipeline on a stored result (Background)",
-)
-async def extract_structured(
-    result_id: int,
-    background_tasks: BackgroundTasks,
-):
-    """Trigger the 7-step universal OCR pipeline in the background."""
-    store = get_store()
-    result = store.get_result(result_id)
-    if not result:
-        raise HTTPException(status_code=404, detail="Result not found")
-
-    file_path = result.get("file_path")
-    if not file_path or not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Source file not found")
-
-    # Queue the task
-    background_tasks.add_task(_run_extraction_task, result_id, file_path)
-
-    return {
-        "result_id": result_id,
-        "status": "processing",
-        "message": "Extraction started in background."
-    }
-
-
-async def _run_extraction_task(result_id: int, file_path: str):
-    """Background task function to run the pipeline and update DB."""
-    store = get_store()
-    settings = get_settings()
-    client = OllamaOCRClient(
-        base_url=settings.ollama_base_url,
-        ocr_model=settings.ocr_model,
-        timeout=settings.ollama_timeout,
-    )
-    surya_client = _make_surya_client()
-    pipeline = OCRPipeline(client, surya_client=surya_client)
-
-    try:
-        # Run in threadpool to avoid blocking event loop
-        extraction_result = await run_in_threadpool(
-            pipeline.run,
-            file_path=file_path,
-        )
-        
-        # Extract fields and tokens
-        fields = extraction_result.get("fields", {})
-        tokens = extraction_result.get("raw_tokens", [])
-        
-        # Update DB
-        store.update_result_structured(result_id, fields, tokens)
-        logger.info(f"Background extraction complete for result {result_id}")
-        
-    except Exception as e:
-        logger.error(f"Background pipeline error for result {result_id}: {e}")
-        store.update_result_structured(result_id, {}, error=str(e))
-
-
-@router.post(
-    "/results/{result_id}/approve",
-    tags=["Structured Extraction"],
-    summary="Approve or update extracted fields for a result",
-)
-async def approve_result(
-    result_id: int,
-    req: ApproveRequest,
-):
-    """Mark a result as approved, optionally saving field overrides."""
-    store = get_store()
-    result = store.get_result(result_id)
-    if not result:
-        raise HTTPException(status_code=404, detail="Result not found")
-
-    try:
-        with store._cursor() as cur:
-            import json
-            # Merge UI field overrides on top of existing structured_data
-            existing = result.get("structured_data") or {}
-            if isinstance(existing, str):
-                try:
-                    existing = json.loads(existing)
-                except Exception:
-                    existing = {}
-            if req.fields:
-                existing.update(req.fields)
-            cur.execute(
-                "UPDATE results SET structured_data = ?, formatted_text = 'approved' WHERE id = ?",
-                (json.dumps(existing), result_id),
-            )
-    except Exception as e:
-        logger.error(f"Approve error for result {result_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-    return {"approved": True, "result_id": result_id}

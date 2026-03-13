@@ -9,14 +9,21 @@ import tempfile
 from pathlib import Path
 from app.utils.logger import setup_logger
 
+from app.core.config import get_settings
+
 logger = setup_logger("docvision.pdf")
+settings = get_settings()
 
 
-def pdf_to_images(pdf_path: str, dpi: int = 300) -> list[str]:
+def pdf_to_images(pdf_path: str, dpi: int = None) -> list[str]:
     """
     Convert each page of a PDF into a PNG image.
     Returns a list of temporary image file paths.
     """
+    if dpi is None:
+        # Fallback to setting or default 300
+        dpi = getattr(settings, "ocr_dpi", 300)
+
     logger.debug(f"Converting PDF: {os.path.basename(pdf_path)} at {dpi} DPI")
 
     # ─── Method 1: pdf2image (poppler-based) ───

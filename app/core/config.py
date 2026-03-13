@@ -3,6 +3,7 @@ Application configuration — all settings from environment variables.
 """
 
 import os
+from typing import Optional
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -10,20 +11,22 @@ from functools import lru_cache
 class Settings(BaseSettings):
     # ── Ollama ──
     ollama_base_url: str = "http://localhost:11434"
-    ocr_model: str = "llama3.2-vision:11b"
+    vision_model: str = "llama3.2-vision:11b"
+    cleanup_model: str = "mistral:7b"
+
+    # ── vLLM (Optional) ──
+    vllm_base_url: Optional[str] = None
+    use_vllm: bool = False
+
+    ocr_dpi: int = 300
 
     ollama_timeout: int = 300
-
-    # ── Surya OCR ──
-    surya_device: str = "auto"       # auto | cuda | cpu | mps
-    surya_offline: bool = False      # True = HF_HUB_OFFLINE=1 (after first download)
 
     # ── Data folders ──
     document_dir: str = "/data/Documents"
 
     # ── Storage ──
     db_path: str = "/app/data/docvision.db"
-    docx_output_dir: str = "/app/data/docx_outputs"
     log_dir: str = "/app/logs"
 
     # ── Server ──

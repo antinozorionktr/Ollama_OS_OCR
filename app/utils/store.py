@@ -1,11 +1,9 @@
 """
-Persistent Store — SQLite-backed storage for OCR results and batch state.
-Survives browser refreshes, VPN disconnects, and container restarts.
-The DB file is mounted to the host via Docker volume.
+Persistent Store — SQLite-backed storage for documents and page-wise OCR results.
+New schema: documents + document_pages (no bounding boxes, no tokens).
 """
 
 import sqlite3
-import json
 import os
 import threading
 from datetime import datetime
@@ -19,7 +17,7 @@ DB_PATH = settings.db_path
 
 
 class PersistentStore:
-    """Thread-safe SQLite store for OCR results and batch job state."""
+    """Thread-safe SQLite store for documents and page-level OCR results."""
 
     def __init__(self, db_path: str = DB_PATH):
         self.db_path = db_path
@@ -49,319 +47,188 @@ class PersistentStore:
 
     def _init_tables(self):
         with self._cursor() as cur:
-            # ── OCR Results ──
+            # ── Documents ──
             cur.execute("""
-                CREATE TABLE IF NOT EXISTS results (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    file_name   TEXT NOT NULL,
-                    file_path   TEXT NOT NULL,
-                    doc_type    TEXT NOT NULL,
-                    raw_text    TEXT,
-                    formatted_text TEXT,
-                    structured_data TEXT,
-                    tokens      TEXT,
-                    page_count  INTEGER DEFAULT 0,
+                CREATE TABLE IF NOT EXISTS documents (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    filename        TEXT NOT NULL,
+                    file_path       TEXT NOT NULL,
+                    uploaded_at     TEXT NOT NULL,
+                    total_pages     INTEGER DEFAULT 0,
                     processing_time_seconds REAL,
-                    error       TEXT,
-                    processed_at TEXT NOT NULL,
-                    batch_id    TEXT,
-                    created_at  TEXT DEFAULT (datetime('now'))
+                    error           TEXT
                 )
             """)
 
-            # ── Batch Jobs ──
+            # ── Document Pages ──
             cur.execute("""
-                CREATE TABLE IF NOT EXISTS batches (
-                    id          TEXT PRIMARY KEY,
-                    status      TEXT NOT NULL DEFAULT 'running',
-                    total_files INTEGER NOT NULL,
-                    completed   INTEGER NOT NULL DEFAULT 0,
-                    failed      INTEGER NOT NULL DEFAULT 0,
-                    started_at  TEXT NOT NULL,
-                    finished_at TEXT,
-                    config      TEXT
+                CREATE TABLE IF NOT EXISTS document_pages (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    document_id     INTEGER NOT NULL,
+                    page_number     INTEGER NOT NULL,
+                    raw_text        TEXT,
+                    cleaned_text    TEXT,
+                    recreated_layout TEXT,
+                    structured_data TEXT,  -- New column for key-value pairs
+                    created_at      TEXT DEFAULT (datetime('now')),
+                    FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
                 )
             """)
 
-            # ── Batch Queue (tracks individual files in a batch) ──
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS batch_queue (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    batch_id    TEXT NOT NULL,
-                    file_path   TEXT NOT NULL,
-                    doc_type    TEXT NOT NULL,
-                    status      TEXT NOT NULL DEFAULT 'pending',
-                    result_id   INTEGER,
-                    error       TEXT,
-                    duration_s  REAL,
-                    FOREIGN KEY (batch_id) REFERENCES batches(id),
-                    FOREIGN KEY (result_id) REFERENCES results(id)
-                )
-            """)
-
-            # ── Schema migrations: add columns that may be missing in older DBs ──
-            cur.execute("PRAGMA table_info(results)")
-            existing_columns = {row[1] for row in cur.fetchall()}
-            if "tokens" not in existing_columns:
-                cur.execute("ALTER TABLE results ADD COLUMN tokens TEXT")
-            if "formatted_text" not in existing_columns:
-                cur.execute("ALTER TABLE results ADD COLUMN formatted_text TEXT")
-
-            # ── Index for fast lookups ──
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_results_batch ON results(batch_id)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_queue_batch ON batch_queue(batch_id)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_queue_status ON batch_queue(batch_id, status)")
+            # ── Indexes ──
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_pages_doc ON document_pages(document_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_pages_doc_page ON document_pages(document_id, page_number)")
 
     # ─────────────────────────────────────
-    # RESULTS CRUD
+    # DOCUMENTS CRUD
     # ─────────────────────────────────────
 
-    def save_result(self, result: dict, batch_id: Optional[str] = None) -> int:
-        """Save a processing result. Returns the row ID."""
+    def save_document(
+        self,
+        filename: str,
+        file_path: str,
+        total_pages: int = 0,
+        processing_time_seconds: float = None,
+        error: str = None,
+    ) -> int:
+        """Save a new document record. Returns the document ID."""
         with self._cursor() as cur:
             cur.execute("""
-                INSERT INTO results (file_name, file_path, doc_type, raw_text,
-                    formatted_text, structured_data, tokens, page_count, processing_time_seconds, error,
-                    processed_at, batch_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO documents (filename, file_path, uploaded_at, total_pages,
+                    processing_time_seconds, error)
+                VALUES (?, ?, ?, ?, ?, ?)
             """, (
-                result.get("file_name", ""),
-                result.get("file_path", ""),
-                result.get("doc_type", ""),
-                result.get("raw_text", ""),
-                result.get("formatted_text", ""),
-                json.dumps(result.get("structured_data", {})),
-                json.dumps(result.get("tokens", [])),
-                result.get("page_count", 0),
-                result.get("processing_time_seconds"),
-                result.get("error"),
-                result.get("processed_at", datetime.now().isoformat()),
-                batch_id,
+                filename,
+                file_path,
+                datetime.now().isoformat(),
+                total_pages,
+                processing_time_seconds,
+                error,
             ))
             return cur.lastrowid
 
-    def get_all_results(self, doc_type: Optional[str] = None) -> list[dict]:
-        """Get all results, optionally filtered by doc_type."""
+    def update_document(
+        self,
+        document_id: int,
+        total_pages: int = None,
+        processing_time_seconds: float = None,
+        error: str = None,
+    ):
+        """Update a document record after processing."""
         with self._cursor() as cur:
-            if doc_type:
+            updates = []
+            values = []
+            if total_pages is not None:
+                updates.append("total_pages = ?")
+                values.append(total_pages)
+            if processing_time_seconds is not None:
+                updates.append("processing_time_seconds = ?")
+                values.append(processing_time_seconds)
+            if error is not None:
+                updates.append("error = ?")
+                values.append(error)
+            if updates:
+                values.append(document_id)
                 cur.execute(
-                    "SELECT * FROM results WHERE doc_type = ? ORDER BY id DESC", (doc_type,)
+                    f"UPDATE documents SET {', '.join(updates)} WHERE id = ?",
+                    tuple(values),
                 )
-            else:
-                cur.execute("SELECT * FROM results ORDER BY id DESC")
-            rows = cur.fetchall()
-        return [self._row_to_result(r) for r in rows]
 
-    def get_result(self, result_id: int) -> Optional[dict]:
-        """Get a single result by ID."""
+    def get_document(self, document_id: int) -> Optional[dict]:
+        """Get a single document by ID."""
         with self._cursor() as cur:
-            cur.execute("SELECT * FROM results WHERE id = ?", (result_id,))
-            row = cur.fetchone()
-        if not row:
-            return None
-        return self._row_to_result(row)
-
-    def get_results_count(self) -> dict:
-        """Get count of results grouped by doc_type."""
-        with self._cursor() as cur:
-            cur.execute(
-                "SELECT doc_type, COUNT(*) as cnt FROM results GROUP BY doc_type"
-            )
-            rows = cur.fetchall()
-        return {row["doc_type"]: row["cnt"] for row in rows}
-
-    def delete_all_results(self):
-        """Delete all results."""
-        with self._cursor() as cur:
-            cur.execute("DELETE FROM results")
-            cur.execute("DELETE FROM batch_queue")
-            cur.execute("DELETE FROM batches")
-
-            return cur.fetchone() is not None
-
-    def update_result_structured(self, result_id: int, structured_data: dict, tokens: list = None, error: str = None):
-        """Update a result with structured extraction data and tokens."""
-        with self._cursor() as cur:
-            if error:
-                cur.execute(
-                    "UPDATE results SET error = ? WHERE id = ?",
-                    (error, result_id)
-                )
-            else:
-                cur.execute("""
-                    UPDATE results 
-                    SET structured_data = ?, tokens = ?, error = NULL
-                    WHERE id = ?
-                """, (
-                    json.dumps(structured_data),
-                    json.dumps(tokens) if tokens else None,
-                    result_id
-                ))
-
-    # ─────────────────────────────────────
-    # BATCH MANAGEMENT
-    # ─────────────────────────────────────
-
-    def create_batch(self, batch_id: str, files: list[tuple[str, str]], config: dict = None) -> str:
-        """
-        Create a new batch job with its file queue.
-        files: list of (file_path, doc_type) tuples.
-        """
-        with self._cursor() as cur:
-            cur.execute("""
-                INSERT INTO batches (id, status, total_files, started_at, config)
-                VALUES (?, 'running', ?, ?, ?)
-            """, (batch_id, len(files), datetime.now().isoformat(),
-                  json.dumps(config) if config else None))
-
-            for file_path, doc_type in files:
-                cur.execute("""
-                    INSERT INTO batch_queue (batch_id, file_path, doc_type, status)
-                    VALUES (?, ?, ?, 'pending')
-                """, (batch_id, file_path, doc_type))
-
-        return batch_id
-
-    def get_batch(self, batch_id: str) -> Optional[dict]:
-        """Get batch metadata."""
-        with self._cursor() as cur:
-            cur.execute("SELECT * FROM batches WHERE id = ?", (batch_id,))
+            cur.execute("SELECT * FROM documents WHERE id = ?", (document_id,))
             row = cur.fetchone()
         if not row:
             return None
         return dict(row)
 
-    def get_pending_files(self, batch_id: str) -> list[dict]:
-        """Get files that still need processing in a batch."""
+    def get_all_documents(self) -> list[dict]:
+        """Get all documents, ordered by most recent first."""
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM documents ORDER BY id DESC")
+            rows = cur.fetchall()
+        return [dict(r) for r in rows]
+
+    def get_documents_count(self) -> int:
+        """Get total document count."""
+        with self._cursor() as cur:
+            cur.execute("SELECT COUNT(*) as cnt FROM documents")
+            row = cur.fetchone()
+        return row["cnt"] if row else 0
+
+    def delete_document(self, document_id: int) -> bool:
+        """Delete a document and all its pages."""
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM document_pages WHERE document_id = ?", (document_id,))
+            cur.execute("DELETE FROM documents WHERE id = ?", (document_id,))
+            return cur.rowcount > 0
+
+    def delete_all_documents(self):
+        """Delete all documents and pages."""
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM document_pages")
+            cur.execute("DELETE FROM documents")
+
+    # ─────────────────────────────────────
+    # DOCUMENT PAGES CRUD
+    # ─────────────────────────────────────
+
+    def save_page_result(
+        self,
+        document_id: int,
+        page_number: int,
+        raw_text: str = None,
+        cleaned_text: str = None,
+        recreated_layout: str = None,
+        structured_data: str = None,
+    ) -> int:
+        """Save a page-level result. Returns the page record ID."""
+        with self._cursor() as cur:
+            cur.execute("""
+                INSERT INTO document_pages (document_id, page_number, raw_text,
+                    cleaned_text, recreated_layout, structured_data)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                document_id,
+                page_number,
+                raw_text,
+                cleaned_text,
+                recreated_layout,
+                structured_data,
+            ))
+            return cur.lastrowid
+
+    def get_document_pages(self, document_id: int) -> list[dict]:
+        """Get all pages for a document, ordered by page number."""
         with self._cursor() as cur:
             cur.execute(
-                "SELECT * FROM batch_queue WHERE batch_id = ? AND status = 'pending' ORDER BY id",
-                (batch_id,),
+                "SELECT * FROM document_pages WHERE document_id = ? ORDER BY page_number",
+                (document_id,),
             )
-            return [dict(r) for r in cur.fetchall()]
+            rows = cur.fetchall()
+        return [dict(r) for r in rows]
 
-    def get_batch_queue(self, batch_id: str) -> list[dict]:
-        """Get all files in a batch queue with their status."""
+    def get_page(self, document_id: int, page_number: int) -> Optional[dict]:
+        """Get a single page by document ID and page number."""
         with self._cursor() as cur:
             cur.execute(
-                "SELECT * FROM batch_queue WHERE batch_id = ? ORDER BY id",
-                (batch_id,),
+                "SELECT * FROM document_pages WHERE document_id = ? AND page_number = ?",
+                (document_id, page_number),
             )
-            return [dict(r) for r in cur.fetchall()]
-
-    def mark_file_done(self, batch_id: str, file_path: str, result_id: int, duration_s: float):
-        """Mark a file as completed in the batch queue."""
-        with self._cursor() as cur:
-            cur.execute("""
-                UPDATE batch_queue SET status = 'done', result_id = ?, duration_s = ?
-                WHERE batch_id = ? AND file_path = ?
-            """, (result_id, duration_s, batch_id, file_path))
-            cur.execute("""
-                UPDATE batches SET completed = completed + 1 WHERE id = ?
-            """, (batch_id,))
-
-    def mark_file_error(self, batch_id: str, file_path: str, error: str, duration_s: float):
-        """Mark a file as failed in the batch queue."""
-        with self._cursor() as cur:
-            cur.execute("""
-                UPDATE batch_queue SET status = 'error', error = ?, duration_s = ?
-                WHERE batch_id = ? AND file_path = ?
-            """, (error, duration_s, batch_id, file_path))
-            cur.execute("""
-                UPDATE batches SET failed = failed + 1 WHERE id = ?
-            """, (batch_id,))
-
-    def finish_batch(self, batch_id: str, status: str = "completed"):
-        """Mark a batch as finished."""
-        with self._cursor() as cur:
-            cur.execute("""
-                UPDATE batches SET status = ?, finished_at = ? WHERE id = ?
-            """, (status, datetime.now().isoformat(), batch_id))
-
-    def get_active_batch(self) -> Optional[dict]:
-        """Get the most recent running or resumable batch."""
-        with self._cursor() as cur:
-            cur.execute("""
-                SELECT * FROM batches WHERE status IN ('running', 'interrupted')
-                ORDER BY started_at DESC LIMIT 1
-            """)
             row = cur.fetchone()
         if not row:
             return None
         return dict(row)
 
-    def interrupt_active_batches(self):
-        """Mark all running batches as interrupted (called on startup to detect crashed batches)."""
+    def update_page_structured_data(self, document_id: int, page_number: int, structured_data: str):
+        """Update the structured_data column for a specific page."""
         with self._cursor() as cur:
             cur.execute("""
-                UPDATE batches SET status = 'interrupted'
-                WHERE status = 'running'
-            """)
-
-    def get_batch_stats(self, batch_id: str) -> dict:
-        """Get detailed stats for a batch."""
-        batch = self.get_batch(batch_id)
-        if not batch:
-            return {}
-
-        with self._cursor() as cur:
-            cur.execute(
-                "SELECT status, COUNT(*) as cnt FROM batch_queue WHERE batch_id = ? GROUP BY status",
-                (batch_id,),
-            )
-            status_counts = {r["status"]: r["cnt"] for r in cur.fetchall()}
-
-            cur.execute(
-                "SELECT AVG(duration_s) as avg_dur FROM batch_queue WHERE batch_id = ? AND status = 'done'",
-                (batch_id,),
-            )
-            avg_row = cur.fetchone()
-            avg_duration = avg_row["avg_dur"] if avg_row and avg_row["avg_dur"] else 0
-
-        pending = status_counts.get("pending", 0)
-        done = status_counts.get("done", 0)
-        errors = status_counts.get("error", 0)
-        total = batch["total_files"]
-
-        return {
-            "batch_id": batch_id,
-            "status": batch["status"],
-            "total_files": total,
-            "done": done,
-            "errors": errors,
-            "pending": pending,
-            "progress_pct": round((done + errors) / total * 100, 1) if total > 0 else 0,
-            "avg_duration_s": round(avg_duration, 1),
-            "eta_seconds": round(pending * avg_duration, 1) if avg_duration else 0,
-            "started_at": batch["started_at"],
-            "finished_at": batch.get("finished_at"),
-        }
-
-    # ─────────────────────────────────────
-    # HELPERS
-    # ─────────────────────────────────────
-
-    def _row_to_result(self, row) -> dict:
-        """Convert a database row to a result dict."""
-        d = dict(row)
-        # Parse JSON fields
-        if d.get("structured_data"):
-            try:
-                d["structured_data"] = json.loads(d["structured_data"])
-            except (json.JSONDecodeError, TypeError):
-                d["structured_data"] = {}
-        else:
-            d["structured_data"] = {}
-        
-        if d.get("tokens"):
-            try:
-                d["tokens"] = json.loads(d["tokens"])
-            except (json.JSONDecodeError, TypeError):
-                d["tokens"] = []
-        else:
-            d["tokens"] = []
-            
-        return d
+                UPDATE document_pages 
+                SET structured_data = ? 
+                WHERE document_id = ? AND page_number = ?
+            """, (structured_data, document_id, page_number))
 
 
 # ─── Singleton ───

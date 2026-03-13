@@ -1,16 +1,16 @@
 """
-Ollama Vision OCR Client
-Sends images to Mistral (or other vision models) via Ollama's API
-for text extraction. Includes structured logging for every API call.
+Ollama Vision + Cleanup Client
+- Vision extraction: llama3.2-vision:11b (image → raw text with structural hints)
+- Text cleanup: mistral:7b (raw text → cleaned text)
+- Layout reconstruction: mistral:7b (raw text → recreated layout)
 """
 
 import base64
-import json
 import time
 import os
+import json
 import requests
 from pathlib import Path
-from typing import Optional
 
 from app.utils.logger import setup_logger
 
@@ -18,20 +18,32 @@ logger = setup_logger("docvision.ollama")
 
 
 class OllamaOCRClient:
-    """Client for interacting with Ollama vision models for OCR tasks."""
+    """Client for the two-model OCR pipeline via Ollama."""
 
     def __init__(
         self,
         base_url: str = "http://localhost:11434",
-        ocr_model: str = "ministral-3:14b",
+        vision_model: str = "llama3.2-vision:11b",
+        cleanup_model: str = "mistral:7b",
         timeout: int = 300,
+        vllm_base_url: str = None,
+        use_vllm: bool = False,
     ):
         self.base_url = base_url.rstrip("/")
-        self.ocr_model = ocr_model
+        self.vllm_base_url = vllm_base_url.rstrip("/") if vllm_base_url else None
+        self.use_vllm = use_vllm
+        self.vision_model = vision_model
+        self.cleanup_model = cleanup_model
         self.timeout = timeout
         logger.info(
             "OllamaOCRClient initialized",
-            extra={"ocr_model": ocr_model, "ollama_url": base_url},
+            extra={
+                "vision_model": vision_model,
+                "cleanup_model": cleanup_model,
+                "ollama_url": base_url,
+                "vllm_url": vllm_base_url,
+                "use_vllm": use_vllm
+            },
         )
 
     def _encode_image(self, image_path: str) -> str:
@@ -39,34 +51,51 @@ class OllamaOCRClient:
         with open(image_path, "rb") as f:
             return base64.b64encode(f.read()).decode("utf-8")
 
-    def _call_ollama(self, prompt: str, image_paths: list[str], step: str = "ocr") -> str:
+    def _call_ollama(
+        self,
+        model: str,
+        prompt: str,
+        image_paths: list[str] | None = None,
+        step: str = "ocr",
+    ) -> str:
         """
-        Call Ollama's /api/generate endpoint with images.
+        Call Ollama's /api/generate endpoint.
+        Supports both vision calls (with images) and text-only calls (without images).
         """
-        file_sizes = []
-        for p in image_paths:
-            try:
-                file_sizes.append(round(os.path.getsize(p) / 1024, 1))
-            except OSError:
-                file_sizes.append(0)
+        images_b64 = []
+        if image_paths:
+            for p in image_paths:
+                images_b64.append(self._encode_image(p))
 
         logger.debug(
-            f"Ollama API call starting | step={step} | images={len(image_paths)} | sizes_kb={file_sizes}",
+            f"Ollama API call starting | model={model} | step={step} | images={len(images_b64)}",
             extra={"step": step},
         )
 
-        images_b64 = [self._encode_image(p) for p in image_paths]
-
+        # ── Options ──
+        # Important: set num_ctx to handle large documents (raw text + prompt)
         payload = {
-            "model": self.ocr_model,
+            "model": model,
             "prompt": prompt,
-            "images": images_b64 if images_b64 else [],
+            "images": images_b64,
             "stream": False,
             "options": {
-                "temperature": 0.1,
-                "num_predict": 4096,
+                "temperature": 0.0,
+                "top_p": 0.85,
+                "top_k": 20,
+                "repeat_penalty": 1.35,
+                "num_predict": 2048,
+                "num_ctx": 16384,
+                "num_keep": 0,
+                "stop": [
+                    "END_TRANSCRIPTION",
+                    "<END>",
+                    "### END"
+                ]
             },
         }
+        if images_b64:
+            payload["images"] = images_b64
 
         url = f"{self.base_url}/api/generate"
         start = time.time()
@@ -77,9 +106,15 @@ class OllamaOCRClient:
             result = response.json()
             duration = round(time.time() - start, 2)
 
-            resp_text = result.get("response", "")
+            resp_text = result.get("response", "").strip()
+            
+            # Post-process: Remove meta-commentary like "Here is the cleaned text:"
+            lines = resp_text.split("\n")
+            if lines and ("here is" in lines[0].lower() or "certainly" in lines[0].lower()):
+                resp_text = "\n".join(lines[1:]).strip()
+
             logger.info(
-                f"Ollama API call complete | step={step} | {duration}s | response_len={len(resp_text)}",
+                f"Ollama API call complete | model={model} | step={step} | {duration}s | response_len={len(resp_text)}",
                 extra={"step": step, "duration_s": duration},
             )
             return resp_text
@@ -109,346 +144,335 @@ class OllamaOCRClient:
             )
             raise RuntimeError(f"Ollama API error: {e.response.status_code} — {e.response.text}")
 
-    def extract_raw_text(self, image_path: str) -> str:
-        """Extract all visible text from an image using OCR."""
-        prompt = (
-            "You are a high-accuracy OCR and document transcription system.\n\n"
-            "Your task is to transcribe ALL visible text from the provided document image.\n\n"
+    def _call_vllm(
+        self,
+        model: str,
+        prompt: str,
+        image_paths: list[str] | None = None,
+        step: str = "ocr",
+    ) -> str:
+        """Call vLLM's OpenAI-compatible /v1/chat/completions endpoint."""
+        if not self.vllm_base_url:
+            raise ValueError("vLLM base URL not configured")
 
-            "### Document Types You May Encounter\n"
-            "- Printed documents\n"
-            "- Handwritten notes or forms\n"
-            "- Forms with fields and labels\n"
-            "- Tables and structured layouts\n"
-            "- Signatures and initials\n"
-            "- Checkboxes or radio buttons\n"
-            "- Stamps or seals\n\n"
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                ]
+            }
+        ]
 
-            "### Transcription Rules\n"
-            "1. Extract ALL readable text exactly as it appears.\n"
-            "2. Preserve the layout and structure where possible.\n"
-            "3. Maintain line breaks and spacing.\n"
-            "4. Represent tables using rows and columns aligned in plain text.\n"
-            "5. For checkboxes:\n"
-            "   - [x] if checked\n"
-            "   - [ ] if unchecked\n"
-            "6. If a signature is present, write: [Signature]\n"
-            "7. If handwritten text appears, transcribe it as written.\n"
-            "8. If text is unclear, mark it as [illegible].\n\n"
+        if image_paths:
+            for p in image_paths:
+                b64 = self._encode_image(p)
+                ext = Path(p).suffix.lower().lstrip(".")
+                if ext == "jpg": ext = "jpeg"
+                messages[0]["content"].append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/{ext};base64,{b64}"}
+                })
 
-            "Output ONLY the transcription. Do not explain anything."
-        )
-        return self._call_ollama(prompt, [image_path], step="raw_text_extraction")
-
-    def extract_tokens_with_bbox(
-        self, image_path: str, page: int = 1, image_width: int = 1000, image_height: int = 1414
-    ) -> list[dict]:
-        """
-        Extract text tokens with bounding boxes from an image.
-        Returns list of {text, bbox:[x1,y1,x2,y2], page} dicts.
-        The model is asked to return spatial token information.
-        Falls back to line-level estimation if model doesn't support native bbox.
-        """
-        prompt = (
-            "You are a precise OCR token extraction system.\n\n"
-            "Analyze the document image and return ALL visible text as a JSON array.\n\n"
-            "For each piece of text, estimate its bounding box position on the image.\n"
-            f"The image is {image_width}x{image_height} pixels.\n\n"
-            "### Rules:\n"
-            "1. Break text into meaningful tokens: words, numbers, labels, values.\n"
-            "2. For each token estimate [x1, y1, x2, y2] pixel coordinates.\n"
-            "   - x1,y1 = top-left corner of the token\n"
-            "   - x2,y2 = bottom-right corner of the token\n"
-            "3. Sort tokens roughly by reading order (top-to-bottom, left-to-right).\n"
-            "4. Include ALL text — headers, body, tables, footers.\n\n"
-            "Return ONLY a valid JSON array. No explanations. No markdown.\n\n"
-            "Example output:\n"
-            '[\n'
-            '  {"text": "INVOICE", "bbox": [300, 50, 500, 80], "page": 1},\n'
-            '  {"text": "INV-2023-001", "bbox": [400, 95, 550, 120], "page": 1}\n'
-            ']'
-        )
-        raw = self._call_ollama(prompt, [image_path], step="token_extraction")
-
-        # Parse JSON response
-        text = raw.strip()
-        if text.startswith("```"):
-            lines = text.split("\n")
-            lines = lines[1:] if lines[0].startswith("```") else lines
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            text = "\n".join(lines).strip()
-
-        try:
-            tokens = json.loads(text)
-            return self._validate_tokens(tokens, page)
-        except json.JSONDecodeError:
-            # Tier 2: Recover partial array by truncating at last complete `}`
-            recovered = self._recover_partial_token_array(text)
-            if recovered is not None:
-                logger.info(
-                    f"Recovered {len(recovered)} tokens from partial JSON response.",
-                    extra={"step": "token_extraction"},
-                )
-                return self._validate_tokens(recovered, page)
-            # Tier 3: Raw text fallback
-            logger.warning(
-                "Token bbox parse failed; falling back to raw text synthesis.",
-                extra={"step": "token_extraction"},
-            )
-            raw_text = self.extract_raw_text(image_path)
-            return self._synthesize_tokens_from_text(raw_text, page, image_width, image_height)
-        except Exception as e:
-            logger.warning(f"Token extraction unexpected error: {e}. Falling back.",
-                           extra={"step": "token_extraction"})
-            raw_text = self.extract_raw_text(image_path)
-            return self._synthesize_tokens_from_text(raw_text, page, image_width, image_height)
-
-    def _validate_tokens(self, tokens, page: int) -> list[dict]:
-        """Validate and normalise a parsed token list."""
-        result = []
-        for t in tokens:
-            if isinstance(t, dict) and "text" in t and "bbox" in t:
-                try:
-                    result.append({
-                        "text": str(t["text"]).strip(),
-                        "bbox": [float(v) for v in t["bbox"][:4]],
-                        "page": int(t.get("page", page))
-                    })
-                except (TypeError, ValueError):
-                    pass
-        return result
-
-    def _recover_partial_token_array(self, text: str):
-        """
-        Salvage valid tokens from a truncated JSON array.
-        Finds the last complete JSON object, closes the array, and re-parses.
-        """
-        last_brace = text.rfind('},')
-        if last_brace == -1:
-            last_brace = text.rfind('}')
-        if last_brace == -1:
-            return None
-
-        candidate = text[:last_brace + 1].strip()
-        if candidate.endswith(','):
-            candidate = candidate[:-1]
-        start = candidate.find('[')
-        if start == -1:
-            return None
-        candidate = candidate[start:] + ']'
-
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            return None
-
-
-    def _synthesize_tokens_from_text(self, text: str, page: int, w: int, h: int) -> list[dict]:
-        """Fallback: create approximate bbox tokens by distributing lines vertically."""
-        import re
-        tokens = []
-        lines = [l for l in text.split("\n") if l.strip()]
-        line_h = max(h // max(len(lines), 1), 16)
-        for idx, line in enumerate(lines):
-            words = re.split(r'\s+', line.strip())
-            line_y1 = idx * line_h
-            line_y2 = line_y1 + line_h
-            col_w = max(w // max(len(words), 1), 30)
-            for widx, word in enumerate(words):
-                if word:
-                    tokens.append({
-                        "text": word,
-                        "bbox": [widx * col_w, line_y1, (widx + 1) * col_w, line_y2],
-                        "page": page
-                    })
-        return tokens
-
-    def extract_structured_data(self, image_path: str, doc_type: str) -> dict:
-        """Extract structured key-value data from a document image."""
-
-        schema_prompts = {
-            "document": (
-                "You are an expert document intelligence and information extraction system.\n"
-                "Analyze the provided document image and extract all information into structured JSON.\n\n"
-
-                "The document may include:\n"
-                "- Printed or handwritten text\n"
-                "- Forms with labeled fields\n"
-                "- Tables\n"
-                "- Checkboxes or radio buttons\n"
-                "- Signatures\n"
-                "- Stamps or seals\n\n"
-
-                "### Extraction Rules\n"
-
-                "1. GENERAL METADATA\n"
-                "Extract high-level document information:\n"
-                "- document_type\n"
-                "- title\n"
-                "- date\n"
-                "- document_id\n"
-                "- issuing_organization\n"
-                "- involved_entities\n\n"
-
-                "2. FORM FIELDS\n"
-                "Extract all label-value pairs from the document.\n"
-                "Example:\n"
-                "Name: John Smith\n"
-                "Address: 21 Baker Street\n\n"
-
-                "Return them as:\n"
-                '"fields": {\n'
-                '  "name": "John Smith",\n'
-                '  "address": "21 Baker Street"\n'
-                "}\n\n"
-
-                "3. TABLES\n"
-                "Detect tables and return them as arrays of objects.\n"
-                "Use column headers when available.\n"
-                "Example:\n"
-                '"tables": [\n'
-                "  {\n"
-                '    "table_name": "items",\n'
-                '    "rows": [\n'
-                '      {"item": "Pen", "qty": 10, "price": 2.5}\n'
-                "    ]\n"
-                "  }\n"
-                "]\n\n"
-
-                "4. CHECKBOXES AND RADIO BUTTONS\n"
-                "Return checkbox states as boolean values.\n"
-                "Example:\n"
-                '"checkboxes": {\n'
-                '  "terms_accepted": true,\n'
-                '  "subscribe_newsletter": false\n'
-                "}\n\n"
-
-                "5. HANDWRITTEN TEXT\n"
-                "Transcribe handwritten text exactly as seen.\n"
-                "If uncertain, include best guess and mark with '(uncertain)'.\n\n"
-
-                "6. SIGNATURES\n"
-                "If a signature is present, return:\n"
-                '"signatures": [\n'
-                '  {\n'
-                '    "label": "Applicant Signature",\n'
-                '    "present": true\n'
-                "  }\n"
-                "]\n\n"
-
-                "7. STAMPS / SEALS\n"
-                "If an official stamp or seal is visible:\n"
-                '"stamps": ["Company Seal", "Approved Stamp"]\n\n'
-
-                "8. MISSING DATA\n"
-                "If a value cannot be determined, return null.\n\n"
-
-                "### JSON STRUCTURE\n"
-                "Return a clean JSON object structured like this:\n\n"
-
-                "{\n"
-                '  "document_metadata": {},\n'
-                '  "fields": {},\n'
-                '  "tables": [],\n'
-                '  "checkboxes": {},\n'
-                '  "signatures": [],\n'
-                '  "stamps": [],\n'
-                '  "notes": []\n'
-                "}\n\n"
-
-                "### OUTPUT RULES\n"
-                "- Output ONLY valid JSON\n"
-                "- No markdown\n"
-                "- No explanations\n"
-                "- No code fences\n"
-            )
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.0,
+            "max_tokens": 2048,
         }
 
-        prompt = schema_prompts.get(doc_type, schema_prompts["document"])
-        raw_response = self._call_ollama(prompt, [image_path], step="structured_extraction")
-        return self._parse_json_response(raw_response)
-
-    def detect_layout(self, image_path: str) -> dict:
-        """
-        Stage: Layout Detection.
-        Analyzes the document image to determine its structural layout
-        before detailed extraction — helps guide the extraction pipeline.
-        Returns a dict with layout metadata.
-        """
-        prompt = (
-            "You are a document layout analysis system.\n"
-            "Analyze the provided document image and identify its structural layout.\n\n"
-            "### Detect and return the following:\n"
-            "1. document_type: What kind of document is this? (e.g. invoice, form, contract, ID, receipt, medical report, table, etc.)\n"
-            "2. layout_type: Describe the layout (e.g. single-column, multi-column, table-heavy, form-based, handwritten, mixed)\n"
-            "3. has_tables: true/false — does the document contain data tables?\n"
-            "4. has_handwriting: true/false — is any handwriting present?\n"
-            "5. has_checkboxes: true/false — are there any checkboxes or radio buttons?\n"
-            "6. has_signatures: true/false — are signatures present?\n"
-            "7. has_stamps: true/false — are official stamps or seals visible?\n"
-            "8. page_orientation: portrait or landscape\n"
-            "9. language: detected language(s)\n"
-            "10. notes: any other notable layout features\n\n"
-            "Return ONLY valid JSON. No markdown. No explanations.\n\n"
-            "Example:\n"
-            "{\n"
-            '  "document_type": "invoice",\n'
-            '  "layout_type": "form-based",\n'
-            '  "has_tables": true,\n'
-            '  "has_handwriting": false,\n'
-            '  "has_checkboxes": false,\n'
-            '  "has_signatures": true,\n'
-            '  "has_stamps": false,\n'
-            '  "page_orientation": "portrait",\n'
-            '  "language": "English",\n'
-            '  "notes": "Two-column layout with line items table"\n'
-            "}"
-        )
-        raw = self._call_ollama(prompt, [image_path], step="layout_detection")
-        return self._parse_json_response(raw)
-
-    def _parse_json_response(self, response: str) -> dict:
-        """Parse JSON from model response, handling common formatting issues."""
-        text = response.strip()
-
-        # Remove markdown code fences
-        if text.startswith("```"):
-            lines = text.split("\n")
-            if lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            text = "\n".join(lines).strip()
+        url = f"{self.vllm_base_url}/v1/chat/completions"
+        start = time.time()
 
         try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            pass
+            response = requests.post(url, json=payload, timeout=self.timeout)
+            response.raise_for_status()
+            result = response.json()
+            duration = round(time.time() - start, 2)
+            
+            resp_text = result["choices"][0]["message"]["content"].strip()
+            
+            logger.info(
+                f"vLLM API call complete | model={model} | step={step} | {duration}s",
+                extra={"step": step, "duration_s": duration},
+            )
+            return resp_text
+        except Exception as e:
+            logger.error(f"vLLM API error ({step}): {e}")
+            raise
 
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        if start != -1 and end > start:
-            try:
-                return json.loads(text[start:end])
-            except json.JSONDecodeError:
-                pass
+    # ───────────────────────────────────────────
+    # Stage 0: Layout Detection (llama3.2-vision)
+    # ───────────────────────────────────────────
 
-        logger.warning("Failed to parse JSON from model response", extra={"step": "json_parse"})
-        return {"_raw_response": text, "_parse_error": "Could not extract valid JSON from response"}
+    def detect_layout(self, image_path: str) -> list[dict]:
+        """
+        Detect logical regions on a page (Header, Table, Paragraph, etc.)
+        using the vision model. Returns a list of region dicts with bboxes.
+        """
+        prompt = (
+            "SYSTEM: You are a layout analysis engine.\n"
+            "Identify and provide bounding boxes for all logical regions in the document.\n\n"
+            "### CATEGORIES\n"
+            "- header\n"
+            "- paragraph\n"
+            "- table\n"
+            "- form\n"
+            "- section_title\n"
+            "- footer\n\n"
+            "### OUTPUT FORMAT\n"
+            "Return JSON only: [{\"type\": \"category\", \"bbox\": [x1, y1, x2, y2], \"label\": \"description\"}]\n"
+            "Coordinates [0-1000] relative to image size.\n"
+            "Respond ONLY with valid JSON.\n\n"
+            "LAYOUT:"
+        )
+        if self.use_vllm:
+            resp = self._call_vllm(self.vision_model, prompt, [image_path], step="layout_detection")
+        else:
+            resp = self._call_ollama(self.vision_model, prompt, [image_path], step="layout_detection")
+        
+        # Basic JSON extraction (robust against model chatter)
+        import json
+        try:
+            # Find start/end of JSON array
+            start_idx = resp.find("[")
+            end_idx = resp.rfind("]") + 1
+            if start_idx != -1 and end_idx != -1:
+                return json.loads(resp[start_idx:end_idx])
+            return []
+        except Exception as e:
+            logger.warning(f"Failed to parse layout detection JSON: {e}")
+            return []
+
+    # ───────────────────────────────────────────
+    # Stage 1: Vision Extraction (llama3.2-vision)
+    # ───────────────────────────────────────────
+
+    def remove_duplicate_blocks(self, text: str) -> str:
+        """Removes duplicated lines/blocks often repeated by LLM OCR."""
+        seen = set()
+        result = []
+        for line in text.splitlines():
+            line_clean = line.strip()
+            if not line_clean:
+                result.append(line)
+                continue
+            if line_clean not in seen:
+                seen.add(line_clean)
+                result.append(line)
+        return "\n".join(result)
+
+    def extract_page_text(self, image_path: str) -> str:
+        """
+        Extract raw text with structural hints from a page image
+        using the vision model (llama3.2-vision:11b).
+        """
+        prompt = (
+            "SYSTEM: You are a high-precision OCR transcription engine.\n"
+            "Your job is to TRANSCRIBE text exactly from the image.\n"
+            "You are NOT allowed to summarize, interpret, or explain anything.\n\n"
+
+            "### GLOBAL RULES\n"
+            "1. Transcribe ALL visible text.\n"
+            "2. Preserve the original reading order (top → bottom, left → right).\n"
+            "3. Preserve line breaks exactly as seen.\n"
+            "4. If text is unclear, write the closest readable text.\n"
+            "5. DO NOT hallucinate missing text.\n"
+            "6. DO NOT explain the document.\n"
+            "7. DO NOT repeat sections unless they actually appear twice.\n\n"
+
+            "### STRUCTURE RULES\n"
+            "Use the following structure markers:\n\n"
+
+            "Tables:\n"
+            "Use | to separate columns\n"
+            "Example:\n"
+            "Item | Qty | Price\n"
+            "Pen | 2 | 10\n\n"
+
+            "Checkboxes:\n"
+            "[x] checked\n"
+            "[ ] unchecked\n\n"
+
+            "Forms:\n"
+            "Field: Value\n\n"
+
+            "Sections:\n"
+            "Write section titles on their own line\n\n"
+
+            "### IMPORTANT\n"
+            "1. Maintain spacing where possible\n"
+            "2. Keep numbers exactly as written\n"
+            "3. Keep punctuation exactly as written\n"
+            "4. If a word is unclear write: [?]\n\n"
+
+            "### OUTPUT FORMAT\n"
+            "Return ONLY the transcription text.\n"
+            "NO explanations.\n"
+            "NO commentary.\n\n"
+
+            "START TRANSCRIPTION:"
+        )
+        raw_text = self._call_ollama(self.vision_model, prompt, [image_path], step="vision_extraction")
+        return self.remove_duplicate_blocks(raw_text)
+
+    # ───────────────────────────────────────────
+    # Stage 2: Text Cleanup (mistral:7b)
+    # ───────────────────────────────────────────
+
+    def clean_text(self, raw_text: str) -> str:
+        """
+        Clean and normalize raw extracted text using mistral:7b.
+        Fixes spacing, punctuation, line grouping, and paragraph structure.
+        """
+        if not raw_text or len(raw_text) < 10:
+            return raw_text or ""
+
+        prompt = (
+            "SYSTEM: You are a document text normalization engine.\n"
+            "Your job is to CLEAN OCR text while preserving its structure.\n\n"
+
+            "### CLEANING RULES\n"
+            "1. Fix spacing and punctuation.\n"
+            "2. Merge broken words caused by OCR errors.\n"
+            "3. Remove duplicated blocks caused by OCR loops.\n"
+            "4. Preserve all tables, checkboxes, and field labels.\n"
+            "5. DO NOT change the meaning of the text.\n"
+            "6. DO NOT invent missing data.\n"
+            "7. DO NOT summarize.\n\n"
+
+            "### STRUCTURE PRESERVATION\n"
+            "You MUST preserve:\n"
+            "- tables using |\n"
+            "- checkboxes [x] [ ]\n"
+            "- field-value pairs\n"
+            "- section headers\n\n"
+
+            "### INPUT TEXT\n"
+            f"{raw_text}\n\n"
+
+            "### OUTPUT\n"
+            "Return the cleaned text only.\n"
+        )
+
+        return self._call_ollama(self.cleanup_model, prompt, step="text_cleanup")
+
+    # ───────────────────────────────────────────
+    # Stage 3: Structured Data Extraction (mistral:7b)
+    # ───────────────────────────────────────────
+
+    def extract_structured_data(self, raw_text: str) -> str:
+        """
+        Extract key-value pairs (semantic entities) and tables from raw text using mistral:7b.
+        Produces a JSON string.
+        """
+        if not raw_text:
+            return "{}"
+
+        prompt = (
+            "SYSTEM: You are a structural information extraction engine.\n\n"
+
+            "TASK: Extract entities and tables from the text into a valid JSON object.\n\n"
+
+            "### EXTRACTION RULES\n"
+            "1. Identify common fields (names, dates, totals, IDs).\n"
+            "2. Identify any tables or lists of items (lines).\n"
+            "3. Format exactly as a JSON object.\n"
+            "4. For regular fields, use: \"field_name\": \"value\"\n"
+            "5. For tables, use an array of objects under a descriptive key (e.g., \"line_items\").\n"
+            "6. Preserve original values exactly.\n"
+            "7. Respond ONLY with valid JSON.\n\n"
+
+            "### TEXT\n"
+            f"{raw_text}\n\n"
+
+            "### OUTPUT FORMAT\n"
+            "{\n"
+            "  \"invoice_number\": \"...\",\n"
+            "  \"line_items\": [\n"
+            "    { \"description\": \"...\", \"amount\": \"...\" }\n"
+            "  ]\n"
+            "}\n"
+        )
+        resp = self._call_ollama(self.cleanup_model, prompt, step="structured_extraction")
+
+        # Robust JSON extraction
+        try:
+            start_idx = resp.find("{")
+            end_idx = resp.rfind("}") + 1
+            if start_idx != -1 and end_idx != -1:
+                # Validate it's actual JSON
+                json_str = resp[start_idx:end_idx]
+                json.loads(json_str) # test parse
+                return json_str
+            return "{}"
+        except Exception:
+            return "{}"
+
+    # ───────────────────────────────────────────
+    # Stage 4: Layout Reconstruction (mistral:7b)
+    # ───────────────────────────────────────────
+
+    def reconstruct_layout(self, raw_text: str) -> str:
+        """
+        Reconstruct document layout from raw text using mistral:7b.
+        Produces a visually formatted version with sections, tables, forms.
+        """
+        if not raw_text:
+            return ""
+
+        prompt = (
+            "SYSTEM: You are a document layout reconstruction engine.\n\n"
+
+            "TASK: Recreate a clean readable version of the document.\n"
+            "Preserve the structure including sections, forms, and tables.\n\n"
+
+            "### LAYOUT RULES\n"
+            "1. Section titles should be centered with separator lines.\n"
+            "2. Tables must have aligned columns.\n"
+            "3. Field-value pairs must stay on one line.\n"
+            "4. Preserve checkboxes using [x] and [ ].\n"
+            "5. Group related fields together.\n"
+            "6. Remove duplicated text blocks if they appear.\n"
+            "7. Do NOT add commentary.\n"
+            "8. Do NOT invent new information.\n\n"
+
+            "### TABLE FORMAT\n"
+            "Align columns using spacing.\n\n"
+
+            "Example:\n"
+            "Item        Qty     Price\n"
+            "Pen         2       10\n\n"
+
+            "### INPUT TEXT\n"
+            f"{raw_text}\n\n"
+
+            "### OUTPUT\n"
+            "Return the reconstructed document only.\n"
+        )
+        return self._call_ollama(self.cleanup_model, prompt, step="layout_reconstruction")
+
+
+    # ───────────────────────────────────────────
+    # Health Check
+    # ───────────────────────────────────────────
 
     def health_check(self) -> dict:
-        """Check if Ollama is running and the OCR model is available."""
+        """Check if Ollama is running and the required models are available."""
         try:
             resp = requests.get(f"{self.base_url}/api/tags", timeout=10)
             resp.raise_for_status()
             models = resp.json().get("models", [])
             model_names = [m.get("name", "") for m in models]
-            ocr_ok = any(self.ocr_model in n or n in self.ocr_model for n in model_names)
+
+            vision_ok = any(self.vision_model in n or n in self.vision_model for n in model_names)
+            cleanup_ok = any(self.cleanup_model in n or n in self.cleanup_model for n in model_names)
+
             return {
                 "ollama_reachable": True,
-                "ocr_model_available": ocr_ok,
-                "model_available": ocr_ok,
+                "vision_model_available": vision_ok,
+                "cleanup_model_available": cleanup_ok,
+                "model_available": vision_ok and cleanup_ok,
                 "available_models": model_names,
             }
         except requests.exceptions.ConnectionError:

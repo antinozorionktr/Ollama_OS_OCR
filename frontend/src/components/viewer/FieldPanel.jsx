@@ -16,18 +16,84 @@ const FIELD_LABELS = {
     tax: 'TAX',
 };
 
-const FieldCard = ({ fieldKey, fieldData, onClick, isHighlighted }) => {
-    const label = FIELD_LABELS[fieldKey] || fieldKey.replace(/_/g, ' ').toUpperCase();
-    const value = fieldData.value != null ? String(fieldData.value) : '—';
+const DataTable = ({ label, data }) => {
+    if (!Array.isArray(data) || data.length === 0) return null;
+    
+    // Check if it's array of objects or array of arrays
+    const isArrayOfArrays = Array.isArray(data[0]);
+    let headers = [];
+    let rows = [];
+
+    if (isArrayOfArrays) {
+        // Assume first row is headers if it contains strings
+        const potentialHeaders = data[0];
+        const allStrings = potentialHeaders.every(h => typeof h === 'string');
+        if (allStrings && data.length > 1) {
+            headers = potentialHeaders;
+            rows = data.slice(1);
+        } else {
+            headers = potentialHeaders.map((_, i) => `COL ${i + 1}`);
+            rows = data;
+        }
+    } else {
+        headers = Object.keys(data[0]);
+        rows = data;
+    }
 
     return (
-        <div
-            className={`field-card ${isHighlighted ? 'highlighted' : ''}`}
-            onClick={() => onClick(fieldKey)}
-        >
+        <div className="table-container">
+            <span className="field-label">{label}</span>
+            <div className="table-wrapper">
+                <table className="extracted-table">
+                    <thead>
+                        <tr>
+                            <th className="idx-col">#</th>
+                            {headers.map((h, i) => (
+                                <th key={i}>{String(h).replace(/_/g, ' ').toUpperCase()}</th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows.map((row, i) => (
+                            <tr key={i}>
+                                <td className="idx-col">{i + 1}</td>
+                                {isArrayOfArrays ? (
+                                    row.map((val, j) => <td key={j}>{val != null ? String(val) : ''}</td>)
+                                ) : (
+                                    headers.map((h, j) => (
+                                        <td key={j}>{row[h] != null ? String(row[h]) : ''}</td>
+                                    ))
+                                )}
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+};
+
+const FieldCard = ({ fieldKey, fieldData, onChange, isHighlighted }) => {
+    const label = FIELD_LABELS[fieldKey] || fieldKey.replace(/_/g, ' ').toUpperCase();
+    const value = fieldData.value != null ? String(fieldData.value) : '';
+    const isMarkdownTable = value.includes('|') && value.includes('-|-');
+
+    return (
+        <div className={`field-card ${isHighlighted ? 'highlighted' : ''}`}>
             <div className="field-info">
                 <span className="field-label">{label}</span>
-                <span className="field-value">{value}</span>
+                {isMarkdownTable ? (
+                    <div className="field-markdown-value">
+                        <ReactMarkdown>{value}</ReactMarkdown>
+                    </div>
+                ) : (
+                    <input
+                        type="text"
+                        className="field-input"
+                        value={value}
+                        onChange={(e) => onChange(fieldKey, e.target.value)}
+                    />
+                )}
             </div>
         </div>
     );
@@ -60,17 +126,6 @@ const FieldPanel = ({
 
     return (
         <div className="field-panel">
-            {/* Document Metadata */}
-            <div className="panel-section meta-section">
-                <p className="section-label">DOCUMENT METADATA</p>
-                <div className="meta-row">
-                    <div className="meta-item">
-                        <span className="meta-label">TYPE</span>
-                        <span className="meta-value doc-type-badge">{documentType || 'Unknown'}</span>
-                    </div>
-                </div>
-            </div>
-
             {/* Extracted Fields */}
             <div className="panel-section">
                 <div className="section-header-row">
@@ -88,15 +143,30 @@ const FieldPanel = ({
                     </div>
                 ) : fields && Object.keys(fields).length > 0 && !showMarkdown ? (
                     <div className="fields-list">
-                        {Object.entries(fields).map(([key, data]) => (
-                            <FieldCard
-                                key={key}
-                                fieldKey={key}
-                                fieldData={data}
-                                onClick={onFieldClick}
-                                isHighlighted={highlightedKey === key}
-                            />
-                        ))}
+                        {Object.entries(fields).map(([key, data]) => {
+                            const isTable = Array.isArray(data.value) || Array.isArray(data);
+                            const tableData = Array.isArray(data.value) ? data.value : (Array.isArray(data) ? data : null);
+                            
+                            if (isTable && tableData) {
+                                return (
+                                    <DataTable 
+                                        key={key} 
+                                        label={FIELD_LABELS[key] || key.replace(/_/g, ' ').toUpperCase()} 
+                                        data={tableData} 
+                                    />
+                                );
+                            }
+
+                            return (
+                                <FieldCard
+                                    key={key}
+                                    fieldKey={key}
+                                    fieldData={data}
+                                    onChange={onFieldClick}
+                                    isHighlighted={highlightedKey === key}
+                                />
+                            );
+                        })}
                     </div>
                 ) : showMarkdown ? (
                     <div className="markdown-container">
@@ -163,13 +233,6 @@ const FieldPanel = ({
 
             {/* Action Buttons */}
             <div className="panel-actions">
-                <button
-                    className={`btn-approve ${isApproved ? 'approved' : ''}`}
-                    onClick={onApprove}
-                    disabled={isApproved}
-                >
-                    {isApproved ? '✓ Document Approved' : '⊕ Approve Document'}
-                </button>
                 <div className="btn-row">
                     <button className="btn-secondary" onClick={onSave}>
                         💾 Save Changes
