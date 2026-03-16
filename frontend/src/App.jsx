@@ -4,6 +4,7 @@ import Layout from './components/layout/Layout';
 import UploadPage from './pages/UploadPage';
 import DocumentsPage from './pages/DocumentsPage';
 import DocumentViewerPage from './pages/DocumentViewerPage';
+import TipsPage from './pages/TipsPage';
 
 function App() {
   return (
@@ -15,8 +16,7 @@ function App() {
           <Route path="dashboard" element={<div className="p-8">Dashboard Coming Soon</div>} />
           <Route path="documents" element={<DocumentsPage />} />
           <Route path="documents/:id" element={<DocumentViewerPage />} />
-          <Route path="templates" element={<div className="p-8">Templates Coming Soon</div>} />
-          <Route path="settings" element={<div className="p-8">Settings Coming Soon</div>} />
+          <Route path="tips" element={<TipsPage />} />
         </Route>
       </Routes>
     </Router>

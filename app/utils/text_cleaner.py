@@ -50,6 +50,10 @@ def clean_ocr_text(raw_text: str) -> str:
     # ── Fix hyphenated line breaks (word- \n break → wordbreak) ──
     text = re.sub(r"(\w)-\s*\n\s*(\w)", r"\1\2", text)
 
+    # ── Normalize Labels ──
+    # Bold common patterns like "Label: Value"
+    text = re.sub(r"^(?![#|])([\w\s]{2,20}):(\s+)", r"**\1**:\2", text, flags=re.MULTILINE)
+
     # ── Remove excessive blank lines (keep max 2) ──
     text = re.sub(r"\n{3,}", "\n\n", text)
 
@@ -60,6 +64,21 @@ def clean_ocr_text(raw_text: str) -> str:
     text = re.sub(r"\s+([.,;:!?])", r"\1", text)
     # Fix missing space after punctuation (if followed by uppercase)
     text = re.sub(r"([.,;:!?])([A-Z])", r"\1 \2", text)
+
+    # ── Simple Markdown Table Sanitization ──
+    # If a line looks like it contains | but lacks | --- |, add a simple one if it looks like a header
+    lines = text.split("\n")
+    new_lines = []
+    for i, line in enumerate(lines):
+        new_lines.append(line)
+        if "|" in line and i < len(lines) - 1 and "|" in lines[i+1]:
+            # Check if current line is a header (has words) and next is data
+            if not any(sep in line for sep in ["---", "---"]): # Not already a separator
+                cols = line.count("|")
+                if cols > 0:
+                    new_lines.append("|" + (" --- |" * cols))
+    
+    text = "\n".join(new_lines)
 
     # ── Remove leading/trailing noise ──
     text = text.strip()

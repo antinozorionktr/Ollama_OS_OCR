@@ -342,17 +342,17 @@ class OllamaOCRClient:
             "7. DO NOT summarize.\n\n"
 
             "### STRUCTURE PRESERVATION\n"
-            "You MUST preserve:\n"
-            "- tables using |\n"
-            "- checkboxes [x] [ ]\n"
-            "- field-value pairs\n"
-            "- section headers\n\n"
+            "You MUST preserve and convert to Markdown:\n"
+            "- tables using Markdown table syntax (| --- |)\n"
+            "- checkboxes using [x] and [ ]\n"
+            "- field-value pairs using **Field**: Value\n"
+            "- section headers using # and ##\n\n"
 
             "### INPUT TEXT\n"
             f"{raw_text}\n\n"
 
             "### OUTPUT\n"
-            "Return the cleaned text only.\n"
+            "Return the cleaned Markdown text only.\n"
         )
 
         return self._call_ollama(self.cleanup_model, prompt, step="text_cleanup")
@@ -361,18 +361,26 @@ class OllamaOCRClient:
     # Stage 3: Structured Data Extraction (mistral:7b)
     # ───────────────────────────────────────────
 
-    def extract_structured_data(self, raw_text: str) -> str:
+    def extract_structured_data(self, raw_text: str, regions: list[dict] = None) -> str:
         """
         Extract key-value pairs (semantic entities) and tables from raw text using mistral:7b.
-        Produces a JSON string.
+        Produces a JSON string. Uses regions context for better precision.
         """
         if not raw_text:
             return "{}"
+
+        regions_context = ""
+        if regions:
+            regions_context = "### DETECTED REGIONS (CONTEXT)\n"
+            for r in regions:
+                regions_context += f"- Type: {r['type']}, Label: {r.get('label', 'N/A')}\n"
 
         prompt = (
             "SYSTEM: You are a structural information extraction engine.\n\n"
 
             "TASK: Extract entities and tables from the text into a valid JSON object.\n\n"
+
+            f"{regions_context}\n"
 
             "### EXTRACTION RULES\n"
             "1. Identify common fields (names, dates, totals, IDs).\n"
@@ -388,9 +396,10 @@ class OllamaOCRClient:
 
             "### OUTPUT FORMAT\n"
             "{\n"
-            "  \"invoice_number\": \"...\",\n"
-            "  \"line_items\": [\n"
-            "    { \"description\": \"...\", \"amount\": \"...\" }\n"
+            "  \"document_metadata\": { \"title\": \"...\", \"date\": \"...\" },\n"
+            "  \"fields\": { \"field1\": \"...\", \"field2\": \"...\" },\n"
+            "  \"tables\": [\n"
+            "    { \"table_name\": \"...\", \"rows\": [{ \"col1\": \"...\" }] }\n"
             "  ]\n"
             "}\n"
         )
@@ -412,46 +421,58 @@ class OllamaOCRClient:
     # ───────────────────────────────────────────
     # Stage 4: Layout Reconstruction (mistral:7b)
     # ───────────────────────────────────────────
+    def render_table_markdown(self, table_data: list[dict]) -> str:
+        """Helper to render a JSON table as Markdown."""
+        if not table_data:
+            return ""
+        
+        # Get headers from first row
+        headers = table_data[0].keys()
+        header_row = "| " + " | ".join(headers) + " |"
+        separator_row = "| " + " | ".join(["---"] * len(headers)) + " |"
+        
+        data_rows = []
+        for row in table_data:
+            data_rows.append("| " + " | ".join(str(row.get(h, "")) for h in headers) + " |")
+            
+        return "\n".join([header_row, separator_row] + data_rows)
 
-    def reconstruct_layout(self, raw_text: str) -> str:
+    def reconstruct_layout(self, raw_text: str, regions: list[dict] = None) -> str:
         """
         Reconstruct document layout from raw text using mistral:7b.
-        Produces a visually formatted version with sections, tables, forms.
+        Produces a visually formatted Markdown version.
         """
         if not raw_text:
             return ""
 
+        regions_context = ""
+        if regions:
+            regions_context = "### DETECTED REGIONS (CONTEXT)\n"
+            for r in regions:
+                regions_context += f"- Type: {r['type']}, Label: {r.get('label', 'N/A')}\n"
+
         prompt = (
             "SYSTEM: You are a document layout reconstruction engine.\n\n"
 
-            "TASK: Recreate a clean readable version of the document.\n"
+            "TASK: Recreate a clean readable Markdown version of the document.\n"
             "Preserve the structure including sections, forms, and tables.\n\n"
 
+            f"{regions_context}\n"
+
             "### LAYOUT RULES\n"
-            "1. Section titles should be centered with separator lines.\n"
-            "2. Tables must have aligned columns.\n"
-            "3. Field-value pairs must stay on one line.\n"
+            "1. Use Markdown headers (#, ##, ###) for sections.\n"
+            "2. Tables MUST use Markdown table format (| col |).\n"
+            "3. Field-value pairs must use **Field**: Value.\n"
             "4. Preserve checkboxes using [x] and [ ].\n"
-            "5. Group related fields together.\n"
-            "6. Remove duplicated text blocks if they appear.\n"
-            "7. Do NOT add commentary.\n"
-            "8. Do NOT invent new information.\n\n"
-
-            "### TABLE FORMAT\n"
-            "Align columns using spacing.\n\n"
-
-            "Example:\n"
-            "Item        Qty     Price\n"
-            "Pen         2       10\n\n"
+            "5. Remove duplicated text blocks.\n"
+            "6. Respond with ONLY the reconstructed Markdown document.\n\n"
 
             "### INPUT TEXT\n"
             f"{raw_text}\n\n"
 
             "### OUTPUT\n"
-            "Return the reconstructed document only.\n"
         )
         return self._call_ollama(self.cleanup_model, prompt, step="layout_reconstruction")
-
 
     # ───────────────────────────────────────────
     # Health Check

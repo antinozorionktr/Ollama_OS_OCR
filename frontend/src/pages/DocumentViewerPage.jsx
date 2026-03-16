@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, FileText, AlignLeft, LayoutTemplate, Download, LayoutGrid } from 'lucide-react';
+import { ArrowLeft, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, FileText, AlignLeft, LayoutTemplate, Download, LayoutGrid, RotateCw } from 'lucide-react';
 import FieldPanel from '../components/viewer/FieldPanel';
-import './DocumentViewerPage.css';
 
 /**
  * Parses structured_data string in various formats:
@@ -24,8 +23,6 @@ const parseStructuredData = (dataStr) => {
         }
     } catch (e) {
         // Not JSON
-        // If it looks like a single large extraction result (no colons on many lines)
-        // just return it as a 'general_data' field
         const lines = dataStr.split('\n');
         const fields = {};
         let currentKey = null;
@@ -158,22 +155,23 @@ const DocumentViewerPage = () => {
 
     if (loading) {
         return (
-            <div className="viewer-page">
-                <div className="viewer-loading">
-                    <div className="loading-spinner"></div>
-                    <p>Loading document...</p>
-                </div>
+            <div className="h-full w-full flex flex-col items-center justify-center bg-slate-50 gap-4">
+                <div className="w-12 h-12 border-4 border-[#4B5320]/20 border-t-[#4B5320] rounded-full animate-spin"></div>
+                <p className="text-[#4B5320] font-black uppercase tracking-widest text-sm">Decoding Archive...</p>
             </div>
         );
     }
 
     if (!document) {
         return (
-            <div className="viewer-page">
-                <div className="viewer-loading">
-                    <p>Document not found.</p>
-                    <button className="back-btn" onClick={() => navigate('/documents')}>
-                        <ArrowLeft size={18} /> Back to Documents
+            <div className="h-full w-full flex flex-col items-center justify-center bg-slate-50">
+                <div className="text-center space-y-4">
+                    <p className="text-slate-400 font-bold uppercase tracking-widest">Document missing from archive.</p>
+                    <button 
+                        className="flex items-center gap-2 px-6 py-2 bg-[#4B5320] text-white rounded-lg font-bold uppercase text-xs"
+                        onClick={() => navigate('/documents')}
+                    >
+                        <ArrowLeft size={16} /> Return to Archive
                     </button>
                 </div>
             </div>
@@ -181,82 +179,108 @@ const DocumentViewerPage = () => {
     }
 
     return (
-        <div className="viewer-page">
+        <div className="h-screen flex flex-col bg-white overflow-hidden">
             {/* ── Top Bar ── */}
-            <div className="viewer-topbar">
-                <button className="back-btn" onClick={() => navigate('/documents')}>
-                    <ArrowLeft size={18} />
-                    Documents
+            <div className="h-14 bg-[#2F353B] flex items-center justify-between px-6 shrink-0 relative z-30 shadow-md">
+                <button 
+                    className="flex items-center gap-2 px-3 py-1.5 text-white/70 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-all text-xs font-bold uppercase tracking-wider"
+                    onClick={() => navigate('/documents')}
+                >
+                    <ArrowLeft size={16} />
+                    Archive
                 </button>
 
-                <div className="topbar-center">
-                    <span className="doc-name">{document.filename}</span>
+                <div className="flex-1 flex justify-center px-4">
+                    <span className="text-white font-black uppercase tracking-[0.15em] text-sm truncate max-w-md">
+                        {document.filename}
+                    </span>
                 </div>
 
-                <div className="topbar-right">
-                    {/* Page Navigation */}
-                    <div className="page-nav">
+                <div className="flex items-center gap-6">
+                    <div className="flex items-center gap-3 bg-black/20 px-4 py-1.5 rounded-full border border-white/5">
                         <button
-                            className="page-nav-btn"
+                            className="text-white/50 hover:text-white disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
                             onClick={() => goToPage(currentPage - 1)}
                             disabled={currentPage <= 1}
                         >
-                            <ChevronLeft size={16} />
+                            <ChevronLeft size={20} />
                         </button>
-                        <span className="page-indicator">
-                            Page {currentPage} / {totalPages}
+                        <span className="text-white/90 text-xs font-black uppercase tracking-widest min-w-[100px] text-center">
+                            Unit {currentPage} <span className="text-white/30">/</span> {totalPages}
                         </span>
                         <button
-                            className="page-nav-btn"
+                            className="text-white/50 hover:text-white disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
                             onClick={() => goToPage(currentPage + 1)}
                             disabled={currentPage >= totalPages}
                         >
-                            <ChevronRight size={16} />
+                            <ChevronRight size={20} />
                         </button>
                     </div>
+
+                    <button 
+                        onClick={handleRerun}
+                        className="p-2 text-white/70 hover:text-white hover:bg-white/10 rounded-lg transition-all"
+                        title="Re-analyze Document"
+                    >
+                        <RotateCw size={18} />
+                    </button>
                 </div>
             </div>
 
             {/* ── Three-Panel Body ── */}
-            <div className="viewer-body">
+            <div className="flex-1 flex min-h-0 overflow-hidden relative">
                 {/* Left Sidebar: View Selector */}
-                <div className="viewer-sidebar">
-                    <div className="sidebar-header">
-                        <h3>Views</h3>
+                <div className="w-72 bg-slate-50 border-r border-[#C2B280]/20 flex flex-col shrink-0">
+                    <div className="p-4 px-6 border-b border-[#C2B280]/10 flex items-center justify-between bg-white">
+                        <h3 className="text-[#2F353B] font-black uppercase tracking-widest text-[10px]">Analysis Modes</h3>
                     </div>
-                    <div className="view-list">
+                    
+                    <div className="flex-1 overflow-y-auto p-3 space-y-1">
                         {VIEWS.map(view => {
                             const Icon = view.icon;
+                            const isActive = activeView === view.key;
                             return (
                                 <button
                                     key={view.key}
-                                    className={`view-item ${activeView === view.key ? 'active' : ''}`}
+                                    className={`
+                                        w-full flex items-center gap-4 p-4 rounded-2xl transition-all text-left
+                                        ${isActive ? 'bg-[#4B5320] text-white shadow-lg translate-x-1' : 'text-slate-600 hover:bg-[#C2B280]/10'}
+                                    `}
                                     onClick={() => setActiveView(view.key)}
                                 >
-                                    <Icon size={18} />
-                                    <div className="view-item-text">
-                                        <span className="view-item-label">{view.label}</span>
-                                        <span className="view-item-desc">{view.description}</span>
+                                    <div className={`shrink-0 ${isActive ? 'text-white' : 'text-[#4B5320]'}`}>
+                                        <Icon size={20} />
+                                    </div>
+                                    <div className="min-w-0">
+                                        <p className={`text-xs font-black uppercase tracking-tight block truncate ${isActive ? 'text-white' : 'text-[#2F353B]'}`}>
+                                            {view.label}
+                                        </p>
+                                        <p className={`text-[9px] uppercase font-bold tracking-wider leading-tight ${isActive ? 'text-white/60' : 'text-slate-400'}`}>
+                                            {view.description}
+                                        </p>
                                     </div>
                                 </button>
                             );
                         })}
                     </div>
 
-                    {/* Page List */}
+                    {/* Page List Section */}
                     {totalPages > 1 && (
-                        <div className="page-list-section">
-                            <div className="sidebar-header">
-                                <h3>Pages</h3>
+                        <div className="mt-auto border-t border-[#C2B280]/20 bg-slate-100/50">
+                             <div className="p-3 px-6 border-b border-[#C2B280]/10">
+                                <h3 className="text-[#2F353B] font-black uppercase tracking-widest text-[10px] opacity-50">Document Units</h3>
                             </div>
-                            <div className="page-list">
+                            <div className="grid grid-cols-4 gap-1 p-3">
                                 {Array.from({ length: totalPages }, (_, i) => i + 1).map(pageNum => (
                                     <button
                                         key={pageNum}
-                                        className={`page-list-item ${currentPage === pageNum ? 'active' : ''}`}
+                                        className={`
+                                            aspect-square flex items-center justify-center rounded-lg text-[10px] font-black transition-all
+                                            ${currentPage === pageNum ? 'bg-[#4B5320] text-white shadow-md' : 'bg-white text-slate-500 hover:bg-[#C2B280]/20'}
+                                        `}
                                         onClick={() => goToPage(pageNum)}
                                     >
-                                        Page {pageNum}
+                                        {pageNum}
                                     </button>
                                 ))}
                             </div>
@@ -265,32 +289,38 @@ const DocumentViewerPage = () => {
                 </div>
 
                 {/* Center: Original Document Preview */}
-                <div className="viewer-center">
-                    <div className="preview-header">
-                        <span className="preview-title">Original Document</span>
-                        <div className="zoom-controls">
-                            <button className="zoom-btn" onClick={() => setZoom(z => Math.max(z - 0.2, 0.4))}>
+                <div className="flex-1 flex flex-col min-w-0 relative shadow-inner bg-slate-200/40">
+                    <div className="h-12 border-b border-[#C2B280]/10 bg-white/50 backdrop-blur-sm flex items-center justify-between px-6 shrink-0 relative z-10">
+                        <span className="text-[#2F353B] font-black uppercase tracking-widest text-[10px]">Source Preview</span>
+                        <div className="flex items-center gap-4 bg-white/80 px-4 py-1 rounded-full shadow-sm border border-[#C2B280]/20">
+                            <button className="text-slate-400 hover:text-[#4B5320]" onClick={() => setZoom(z => Math.max(z - 0.2, 0.4))}>
                                 <ZoomOut size={16} />
                             </button>
-                            <span className="zoom-level">{Math.round(zoom * 100)}%</span>
-                            <button className="zoom-btn" onClick={() => setZoom(z => Math.min(z + 0.2, 3))}>
+                            <span className="text-[10px] font-black text-[#2F353B] min-w-[40px] text-center">
+                                {Math.round(zoom * 100)}%
+                            </span>
+                            <button className="text-slate-400 hover:text-[#4B5320]" onClick={() => setZoom(z => Math.min(z + 0.2, 3))}>
                                 <ZoomIn size={16} />
                             </button>
                         </div>
                     </div>
-                    <div className="preview-container">
-                        <div className="preview-scroll" style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}>
+                    
+                    <div className="flex-1 overflow-auto p-8 flex justify-center items-start scrollbar-thin scrollbar-thumb-slate-300">
+                        <div 
+                            className="bg-white shadow-2xl transition-transform duration-200 ease-out" 
+                            style={{ transform: `scale(${zoom})`, transformOrigin: 'top center' }}
+                        >
                             {document.filename?.toLowerCase().endsWith('.pdf') ? (
                                 <iframe
                                     src={`/api/documents/${id}/preview#page=${currentPage}`}
-                                    className="pdf-preview"
+                                    className="w-[850px] aspect-[1/1.41] border shadow-inner"
                                     title="Document Preview"
                                 />
                             ) : (
                                 <img
                                     src={`/api/documents/${id}/preview`}
                                     alt="Document Preview"
-                                    className="image-preview"
+                                    className="max-w-4xl h-auto block"
                                 />
                             )}
                         </div>
@@ -298,14 +328,22 @@ const DocumentViewerPage = () => {
                 </div>
 
                 {/* Right: View Content */}
-                <div className="viewer-right">
-                    <div className="content-header">
-                        <span className="content-title">
-                            {VIEWS.find(v => v.key === activeView)?.label || 'Content'}
+                <div className="w-[45%] max-w-[800px] bg-white border-l border-[#C2B280]/20 flex flex-col shrink-0 shadow-2xl relative z-10">
+                    <div className="h-14 border-b border-[#C2B280]/10 flex items-center justify-between px-8 bg-slate-50/50 backdrop-blur-md shrink-0">
+                        <div className="flex items-center gap-3">
+                            <div className="p-2 bg-[#4B5320] rounded-lg text-white">
+                                {React.createElement(VIEWS.find(v => v.key === activeView)?.icon || FileText, { size: 16 })}
+                            </div>
+                            <span className="text-[#2F353B] font-black uppercase tracking-[0.1em] text-sm">
+                                {VIEWS.find(v => v.key === activeView)?.label || 'Analysis Output'}
+                            </span>
+                        </div>
+                        <span className="bg-[#138808]/10 text-[#138808] text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-tighter">
+                            Verified Analysis
                         </span>
-                        <span className="content-page-badge">Page {currentPage}</span>
                     </div>
-                    <div className="content-body">
+                    
+                    <div className="flex-1 overflow-y-auto p-1 leading-relaxed">
                         {activeView === 'structured' ? (
                             <FieldPanel
                                 documentType={document.document_type || 'Document'}
@@ -315,7 +353,9 @@ const DocumentViewerPage = () => {
                                 onRerun={handleRerun}
                             />
                         ) : (
-                            <pre className="content-text">{getViewContent()}</pre>
+                            <div className="p-8 font-mono text-sm text-[#2F353B] whitespace-pre-wrap bg-white selection:bg-[#C2B280]/30">
+                                {getViewContent()}
+                            </div>
                         )}
                     </div>
                 </div>

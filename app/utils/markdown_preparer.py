@@ -23,35 +23,55 @@ def prepare_markdown(structured_data: dict, raw_text: Optional[str] = None) -> s
         md.append("")
 
     # 2. General Fields
-    fields_to_skip = ["title"]
+    metadata = structured_data.get("document_metadata", {}) or structured_data.get("fields", {})
+    if not metadata:
+        # Fallback: find any non-nested fields
+        metadata = {k: v for k, v in structured_data.items() if not isinstance(v, (list, dict))}
+
     field_entries = []
-    for key, info in structured_data.items():
-        if key in fields_to_skip:
+    for key, val in metadata.items():
+        if key.lower() == "title" or not val:
             continue
-        
-        val = info
-        if isinstance(info, dict):
-            val = info.get("value")
-        
-        if val:
-            label = key.replace("_", " ").title()
-            field_entries.append(f"**{label}:** {val}")
+        label = key.replace("_", " ").title()
+        field_entries.append(f"**{label}:** {val}")
 
     if field_entries:
-        md.append("## Document Details")
+        md.append("## Document Information")
         md.extend(field_entries)
         md.append("")
 
     # 3. Tables / Line Items
-    # Note: In our current schema, line_items is usually a separate list
-    # But for a universal preparer, we check if structured_data has a 'line_items' key
-    # or if it's passed separately. For now, assume it's in a 'line_items' key if present.
+    tables = structured_data.get("tables", [])
+    if not tables and "line_items" in structured_data:
+        tables = [{"table_name": "Line Items", "rows": structured_data["line_items"]}]
     
-    # If structured_data is just the fields, we might need the original pipeline output
-    # But let's handle what we have.
-    
-    # 4. Raw Text fallback
-    if raw_text and not field_entries:
+    if tables:
+        for tbl in tables:
+            name = tbl.get("table_name", "Table")
+            rows = tbl.get("rows", [])
+            if rows:
+                md.append(f"## {name}")
+                # Render table
+                headers = rows[0].keys()
+                header_line = "| " + " | ".join(headers) + " |"
+                sep_line = "| " + " | ".join(["---"] * len(headers)) + " |"
+                md.append(header_line)
+                md.append(sep_line)
+                for row in rows:
+                    md.append("| " + " | ".join(str(row.get(h, "")) for h in headers) + " |")
+                md.append("")
+
+    # 4. Extracted Notes / Others
+    for key in ["notes", "stamps", "signatures"]:
+        items = structured_data.get(key, [])
+        if items:
+            md.append(f"## {key.title()}")
+            for item in items:
+                md.append(f"- {item}")
+            md.append("")
+
+    # 5. Raw Text fallback (only if very little structured data)
+    if raw_text and len(md) < 5:
         md.append("## Extracted Text")
         md.append(raw_text)
 

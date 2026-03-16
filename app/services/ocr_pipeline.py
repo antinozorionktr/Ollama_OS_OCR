@@ -16,6 +16,7 @@ from app.utils.ollama_client import OllamaOCRClient
 from app.utils.pdf_handler import pdf_to_images
 from app.utils.store import get_store
 from app.utils.logger import setup_logger
+from app.utils.image_processing import preprocess_for_ocr, preprocess_block_cv
 
 logger = setup_logger("docvision.pipeline")
 
@@ -105,9 +106,13 @@ class OCRPipeline:
                 })
 
             try:
-                # ── Step 0: Layout Detection ──
-                logger.info(f"  Step 0: Detecting layout (page {page_num})")
-                regions = self.client.detect_layout(img_path)
+                # ── Step 0: Pre-processing & Layout Detection ──
+                logger.info(f"  Step 0: Pre-processing & Detecting layout (page {page_num})")
+                
+                # Pre-process the original image
+                preprocessed_img_path = preprocess_for_ocr(img_path)
+                
+                regions = self.client.detect_layout(preprocessed_img_path)
                 logger.info(f"  Detected {len(regions)} logical regions")
 
                 if on_progress:
@@ -121,7 +126,7 @@ class OCRPipeline:
                     for ridx, region in enumerate(regions):
                         try:
                             # Crop and process region
-                            crop_path = self._crop_region(img_path, region["bbox"], page_num, ridx)
+                            crop_path = self._crop_region(preprocessed_img_path, region["bbox"], page_num, ridx)
                             block_text = self.client.extract_page_text(crop_path)
                             block_texts.append(block_text)
                             # Cleanup crop
@@ -133,7 +138,7 @@ class OCRPipeline:
                     raw_text = "\n\n".join(block_texts)
                 else:
                     logger.info(f"  Step 1: Vision extraction (full page)")
-                    raw_text = self.client.extract_page_text(img_path)
+                    raw_text = self.client.extract_page_text(preprocessed_img_path)
 
                 if on_progress:
                     step_pct = 10 + (page_idx * 80 // total_pages) + (25 // total_pages)
@@ -153,7 +158,7 @@ class OCRPipeline:
 
                 # Step 3: Layout reconstruction → recreated layout
                 logger.info(f"  Step 3: Layout reconstruction (page {page_num})")
-                recreated_layout = self.client.reconstruct_layout(raw_text)
+                recreated_layout = self.client.reconstruct_layout(raw_text, regions=regions)
 
                 if on_progress:
                     step_pct = 10 + (page_idx * 80 // total_pages) + (60 // total_pages)
@@ -161,7 +166,7 @@ class OCRPipeline:
 
                 # Step 4: Structured Data Extraction (key-value pairs)
                 logger.info(f"  Step 4: Structured data extraction (page {page_num})")
-                structured_data = self.client.extract_structured_data(raw_text)
+                structured_data = self.client.extract_structured_data(raw_text, regions=regions)
 
                 if on_progress:
                     step_pct = 10 + ((page_idx + 1) * 80 // total_pages)
@@ -205,6 +210,9 @@ class OCRPipeline:
             for p in image_paths:
                 try:
                     os.unlink(p)
+                    # Also cleanup preprocessed page
+                    if os.path.exists(p.replace(".png", "_preprocessed.png")):
+                        os.unlink(p.replace(".png", "_preprocessed.png"))
                 except OSError:
                     pass
 
@@ -269,7 +277,7 @@ class OCRPipeline:
             crop = img.crop((x1, y1, x2, y2))
             
             # Preprocessing: Enhance for OCR
-            crop = self._preprocess_block(crop)
+            crop = preprocess_block_cv(crop)
             
             tmp = tempfile.NamedTemporaryFile(
                 delete=False, suffix=f"_p{page_num}_r{region_idx}.png"

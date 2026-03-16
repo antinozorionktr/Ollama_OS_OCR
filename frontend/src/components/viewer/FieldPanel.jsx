@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
-import { Copy, Check, FileText, List } from 'lucide-react';
+import { Copy, Check, FileText, List, RotateCw, Save } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import './FieldPanel.css';
 
 const FIELD_LABELS = {
     invoice_number: 'INVOICE NUMBER',
@@ -41,33 +40,35 @@ const DataTable = ({ label, data }) => {
     }
 
     return (
-        <div className="table-container">
-            <span className="field-label">{label}</span>
-            <div className="table-wrapper">
-                <table className="extracted-table">
-                    <thead>
-                        <tr>
-                            <th className="idx-col">#</th>
-                            {headers.map((h, i) => (
-                                <th key={i}>{String(h).replace(/_/g, ' ').toUpperCase()}</th>
-                            ))}
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {rows.map((row, i) => (
-                            <tr key={i}>
-                                <td className="idx-col">{i + 1}</td>
-                                {isArrayOfArrays ? (
-                                    row.map((val, j) => <td key={j}>{val != null ? String(val) : ''}</td>)
-                                ) : (
-                                    headers.map((h, j) => (
-                                        <td key={j}>{row[h] != null ? String(row[h]) : ''}</td>
-                                    ))
-                                )}
+        <div className="mb-6">
+            <span className="text-[10px] font-black text-[#4B5320] uppercase tracking-widest block mb-2 opacity-60 px-1">{label}</span>
+            <div className="bg-white rounded-xl border border-[#C2B280]/20 overflow-hidden shadow-sm">
+                <div className="overflow-x-auto">
+                    <table className="w-full border-collapse text-[11px] font-bold uppercase tracking-tight">
+                        <thead>
+                            <tr className="bg-slate-50 border-b border-[#C2B280]/10">
+                                <th className="w-8 py-2 px-3 text-center text-slate-400 border-r border-slate-100">#</th>
+                                {headers.map((h, i) => (
+                                    <th key={i} className="py-2 px-4 text-left text-slate-600 whitespace-nowrap">{String(h).replace(/_/g, ' ')}</th>
+                                ))}
                             </tr>
-                        ))}
-                    </tbody>
-                </table>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50">
+                            {rows.map((row, i) => (
+                                <tr key={i} className="hover:bg-slate-50/50 transition-colors">
+                                    <td className="w-8 py-2 px-3 text-center text-slate-300 border-r border-slate-100">{i + 1}</td>
+                                    {isArrayOfArrays ? (
+                                        row.map((val, j) => <td key={j} className="py-2 px-4 text-[#2F353B]">{val != null ? String(val) : ''}</td>)
+                                    ) : (
+                                        headers.map((h, j) => (
+                                            <td key={j} className="py-2 px-4 text-[#2F353B]">{row[h] != null ? String(row[h]) : ''}</td>
+                                        ))
+                                    )}
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     );
@@ -79,19 +80,20 @@ const FieldCard = ({ fieldKey, fieldData, onChange, isHighlighted }) => {
     const isMarkdownTable = value.includes('|') && value.includes('-|-');
 
     return (
-        <div className={`field-card ${isHighlighted ? 'highlighted' : ''}`}>
-            <div className="field-info">
-                <span className="field-label">{label}</span>
+        <div className={`p-4 rounded-xl border transition-all ${isHighlighted ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-[#C2B280]/20 hover:border-[#4B5320]/30'}`}>
+            <div className="space-y-2">
+                <span className="text-[10px] font-black text-[#4B5320] uppercase tracking-widest opacity-60 block">{label}</span>
                 {isMarkdownTable ? (
-                    <div className="field-markdown-value">
+                    <div className="prose prose-sm max-w-none text-[#2F353B] font-medium leading-relaxed prose-table:border prose-table:rounded-lg prose-th:px-3 prose-td:px-3 prose-th:py-2 prose-td:py-2">
                         <ReactMarkdown>{value}</ReactMarkdown>
                     </div>
                 ) : (
                     <input
                         type="text"
-                        className="field-input"
+                        className="w-full bg-transparent border-none p-0 text-sm font-bold text-[#2F353B] focus:ring-0 placeholder:opacity-30"
                         value={value}
                         onChange={(e) => onChange(fieldKey, e.target.value)}
+                        placeholder="ENTER VALUE..."
                     />
                 )}
             </div>
@@ -125,120 +127,136 @@ const FieldPanel = ({
     };
 
     return (
-        <div className="field-panel">
-            {/* Extracted Fields */}
-            <div className="panel-section">
-                <div className="section-header-row">
-                    <p className="section-label">EXTRACTED FIELDS</p>
-                    <button className="reset-btn" onClick={onRerun} title="Re-run OCR">
-                        RESET ALL
-                    </button>
-                </div>
-
-                {isLoading ? (
-                    <div className="loading-fields">
-                        {[1, 2, 3, 4].map(i => (
-                            <div key={i} className="field-card skeleton" />
-                        ))}
+        <div className="flex flex-col h-full bg-slate-50/30">
+            <div className="flex-1 overflow-y-auto p-6 space-y-8 scrollbar-thin">
+                {/* Extracted Fields */}
+                <div className="space-y-4">
+                    <div className="flex items-center justify-between border-b border-[#C2B280]/10 pb-2">
+                        <h2 className="text-[#4B5320] font-black tracking-[0.2em] text-[10px] flex items-center gap-2">
+                            <FileText size={14} /> EXTRACTED DATA
+                        </h2>
+                        <button 
+                            className="text-[9px] font-black text-rose-500 hover:text-rose-600 bg-rose-50 px-2.5 py-1 rounded transition-colors uppercase tracking-widest"
+                            onClick={onRerun}
+                        >
+                            Reset Buffer
+                        </button>
                     </div>
-                ) : fields && Object.keys(fields).length > 0 && !showMarkdown ? (
-                    <div className="fields-list">
-                        {Object.entries(fields).map(([key, data]) => {
-                            const isTable = Array.isArray(data.value) || Array.isArray(data);
-                            const tableData = Array.isArray(data.value) ? data.value : (Array.isArray(data) ? data : null);
-                            
-                            if (isTable && tableData) {
+
+                    {isLoading ? (
+                        <div className="grid grid-cols-1 gap-3">
+                            {[1, 2, 3, 4].map(i => (
+                                <div key={i} className="h-20 bg-white border border-slate-100 rounded-xl animate-pulse" />
+                            ))}
+                        </div>
+                    ) : fields && Object.keys(fields).length > 0 && !showMarkdown ? (
+                        <div className="space-y-3">
+                            {Object.entries(fields).map(([key, data]) => {
+                                const isTable = Array.isArray(data.value) || Array.isArray(data);
+                                const tableData = Array.isArray(data.value) ? data.value : (Array.isArray(data) ? data : null);
+                                
+                                if (isTable && tableData) {
+                                    return (
+                                        <DataTable 
+                                            key={key} 
+                                            label={FIELD_LABELS[key] || key.replace(/_/g, ' ').toUpperCase()} 
+                                            data={tableData} 
+                                        />
+                                    );
+                                }
+
                                 return (
-                                    <DataTable 
-                                        key={key} 
-                                        label={FIELD_LABELS[key] || key.replace(/_/g, ' ').toUpperCase()} 
-                                        data={tableData} 
+                                    <FieldCard
+                                        key={key}
+                                        fieldKey={key}
+                                        fieldData={data}
+                                        onChange={onFieldClick}
+                                        isHighlighted={highlightedKey === key}
                                     />
                                 );
-                            }
+                            })}
+                        </div>
+                    ) : showMarkdown ? (
+                        <div className="prose prose-sm max-w-none p-6 bg-white rounded-2xl border border-[#C2B280]/20 shadow-sm leading-relaxed text-[#2F353B] font-medium">
+                            <ReactMarkdown>{markdown || rawText || ''}</ReactMarkdown>
+                        </div>
+                    ) : (
+                        <div className="py-12 text-center bg-white rounded-2xl border border-dashed border-[#C2B280]/30">
+                            <p className="text-slate-400 font-bold uppercase tracking-widest text-[10px]">No fields identified in current unit.</p>
+                        </div>
+                    )}
+                </div>
 
-                            return (
-                                <FieldCard
-                                    key={key}
-                                    fieldKey={key}
-                                    fieldData={data}
-                                    onChange={onFieldClick}
-                                    isHighlighted={highlightedKey === key}
-                                />
-                            );
-                        })}
+                {/* Line Items */}
+                {lineItems && lineItems.length > 0 && !showMarkdown && (
+                    <div className="space-y-4">
+                        <h2 className="text-[#4B5320] font-black tracking-[0.2em] text-[10px] flex items-center gap-2 border-b border-[#C2B280]/10 pb-2">
+                            <List size={14} /> TABULAR ENTITIES ({lineItems.length})
+                        </h2>
+                        <div className="space-y-2">
+                            {lineItems.slice(0, 10).map((item, idx) => {
+                                const desc = item.description?.value || item.item?.value || `Sequence ${idx + 1}`;
+                                const total = item.total?.value || item.amount?.value || '';
+                                return (
+                                    <div key={idx} className="flex items-center gap-4 p-4 bg-white rounded-xl border border-[#C2B280]/10 hover:border-[#4B5320]/20 transition-all group">
+                                        <span className="w-8 text-[10px] font-black text-slate-300 group-hover:text-[#4B5320] transition-colors">{(idx + 1).toString().padStart(2, '0')}</span>
+                                        <span className="flex-1 text-xs font-bold text-[#2F353B] truncate uppercase">{desc}</span>
+                                        <span className="text-xs font-black text-[#4B5320] tabular-nums">{total}</span>
+                                    </div>
+                                );
+                            })}
+                        </div>
                     </div>
-                ) : showMarkdown ? (
-                    <div className="markdown-container">
-                        <ReactMarkdown>{markdown || rawText || ''}</ReactMarkdown>
+                )}
+
+                {/* Raw Extracted Text */}
+                {rawText && !showMarkdown && (
+                    <div className="space-y-3">
+                        <div className="flex items-center justify-between border-b border-[#C2B280]/10 pb-2">
+                            <p className="text-[#4B5320] font-black tracking-[0.2em] text-[10px]">RAW SIGNALS</p>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    className={`p-1.5 rounded transition-all ${copied ? 'bg-emerald-50 text-emerald-600' : 'text-slate-400 hover:text-[#4B5320] hover:bg-slate-100'}`}
+                                    onClick={handleCopy}
+                                    title="Copy raw text"
+                                >
+                                    {copied ? <Check size={14} /> : <Copy size={14} />}
+                                </button>
+                                <button
+                                    className="text-[9px] font-black text-[#4B5320] uppercase border border-[#4B5320]/20 px-2 py-1 rounded hover:bg-[#4B5320]/5"
+                                    onClick={() => setRawExpanded(p => !p)}
+                                >
+                                    {rawExpanded ? 'CLOSE' : 'REVEAL'}
+                                </button>
+                            </div>
+                        </div>
+                        <div className={`
+                            bg-[#2F353B] rounded-2xl p-4 font-mono text-[11px] text-[#C2B280]/80 leading-relaxed overflow-hidden transition-all duration-300
+                            ${rawExpanded ? 'max-h-[1000px]' : 'max-h-24'}
+                        `}>
+                            {rawText}
+                            {!rawExpanded && rawText.length > 200 && (
+                                <div className="absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-[#2F353B] to-transparent" />
+                            )}
+                        </div>
                     </div>
-                ) : (
-                    <p className="no-fields-msg">Run extraction to see fields here.</p>
                 )}
             </div>
 
-            {/* Line Items */}
-            {lineItems && lineItems.length > 0 && !showMarkdown && (
-                <div className="panel-section">
-                    <p className="section-label">LINE ITEMS ({lineItems.length})</p>
-                    <div className="line-items-list">
-                        {lineItems.slice(0, 10).map((item, idx) => {
-                            const desc = item.description?.value || item.item?.value || `Item ${idx + 1}`;
-                            const total = item.total?.value || item.amount?.value || '';
-                            return (
-                                <div key={idx} className="line-item-row">
-                                    <span className="li-num">{idx + 1}</span>
-                                    <span className="li-desc">{desc}</span>
-                                    <span className="li-total">{total}</span>
-                                </div>
-                            );
-                        })}
-                    </div>
-                </div>
-            )}
-
-            {/* Raw Extracted Text */}
-            {rawText && !showMarkdown && (
-                <div className="panel-section">
-                    <div className="section-header-row">
-                        <p className="section-label">RAW EXTRACTED TEXT</p>
-                        <div className="header-actions">
-                            <button
-                                className="copy-btn"
-                                onClick={handleCopy}
-                                title="Copy raw text"
-                            >
-                                {copied ? <Check size={14} /> : <Copy size={14} />}
-                            </button>
-                            <button
-                                className="reset-btn"
-                                onClick={() => setRawExpanded(p => !p)}
-                            >
-                                {rawExpanded ? 'COLLAPSE ▲' : 'EXPAND ▼'}
-                            </button>
-                        </div>
-                    </div>
-                    {rawExpanded && (
-                        <div className="raw-text-box">
-                            {rawText}
-                        </div>
-                    )}
-                    {!rawExpanded && (
-                        <p className="raw-text-preview">
-                            {rawText.slice(0, 120)}{rawText.length > 120 ? '…' : ''}
-                        </p>
-                    )}
-                </div>
-            )}
-
             {/* Action Buttons */}
-            <div className="panel-actions">
-                <div className="btn-row">
-                    <button className="btn-secondary" onClick={onSave}>
-                        💾 Save Changes
+            <div className="p-6 bg-white border-t border-[#C2B280]/20 shrink-0">
+                <div className="grid grid-cols-2 gap-3">
+                    <button 
+                        className="flex items-center justify-center gap-2 py-3.5 bg-white border-2 border-[#4B5320] text-[#4B5320] rounded-xl font-black uppercase text-[10px] tracking-widest hover:bg-[#4B5320]/5 transition-all active:scale-[0.98]"
+                        onClick={onSave}
+                    >
+                        <Save size={16} /> Save Changes
                     </button>
-                    <button className="btn-rerun" onClick={onRerun}>
-                        🔄 Re-run OCR
+                    <button 
+                        className="flex items-center justify-center gap-2 py-3.5 bg-[#4B5320] text-white rounded-xl font-black uppercase text-[10px] tracking-widest hover:bg-[#3A4310] shadow-lg shadow-[#4B5320]/20 transition-all active:scale-[0.98]"
+                        onClick={onRerun}
+                    >
+                        <RotateCw size={16} /> Re-extract
                     </button>
                 </div>
             </div>
